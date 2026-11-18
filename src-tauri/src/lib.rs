@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_window_state::StateFlags;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -634,11 +635,47 @@ fn characters_root(app: &AppHandle) -> PathBuf {
     dev
 }
 
+/// Fraction of the monitor the window takes up on first launch.
+const FIRST_LAUNCH_SCALE: f64 = 0.8;
+
+/// The main window starts hidden (see tauri.conf.json). On the very first launch, before the
+/// window-state plugin has saved anything, size it to a share of the current monitor and center
+/// it; later launches keep the size/position the plugin restored. Then show it.
+fn init_main_window(app: &AppHandle) {
+    let Some(win) = app.get_webview_window("main") else { return };
+    let has_saved_state = app
+        .path()
+        .app_config_dir()
+        .map(|d| d.join(tauri_plugin_window_state::DEFAULT_FILENAME).is_file())
+        .unwrap_or(false);
+    if !has_saved_state {
+        let monitor = win.current_monitor().ok().flatten().or_else(|| win.primary_monitor().ok().flatten());
+        if let Some(m) = monitor {
+            let scale = m.scale_factor();
+            let area = m.work_area().size.to_logical::<f64>(scale);
+            // never below the configured minimum, never larger than the screen
+            let w = (area.width * FIRST_LAUNCH_SCALE).max(960.0).min(area.width);
+            let h = (area.height * FIRST_LAUNCH_SCALE).max(600.0).min(area.height);
+            let _ = win.set_size(tauri::LogicalSize::new(w, h));
+        }
+        let _ = win.center();
+    }
+    let _ = win.show();
+    let _ = win.set_focus();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            // remembers size/position/maximized between launches; visibility is ours to manage
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::all() - StateFlags::VISIBLE)
+                .build(),
+        )
         .setup(|app| {
+            init_main_window(app.handle());
             let data_dir = data_dir(app.handle())?;
             std::fs::create_dir_all(&data_dir)?;
             let db = Db::open(&data_dir.join("living_room.db"))?;
