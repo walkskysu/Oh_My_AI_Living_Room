@@ -79,12 +79,16 @@ function reducer(s: State, a: Action): State {
     }
     case "status": {
       const p = a.payload;
+      if (p.status === "working") {
+        const run = s.runs[p.characterId];
+        return run ? { ...s, runs: { ...s.runs, [p.characterId]: { ...run, working: true } } } : s;
+      }
       if (p.status === "running") {
         const { [p.characterId]: _r, ...results } = s.results;
         return {
           ...s,
           results,
-          runs: { ...s.runs, [p.characterId]: { characterId: p.characterId, conversationId: p.conversationId, runId: p.runId, mode: p.mode } },
+          runs: { ...s.runs, [p.characterId]: { characterId: p.characterId, conversationId: p.conversationId, runId: p.runId, working: false } },
           convVersion: s.convVersion + 1,
         };
       }
@@ -92,7 +96,7 @@ function reducer(s: State, a: Action): State {
       const { [p.conversationId]: _s, ...streaming } = s.streaming;
       const watching = s.openCharacterId === p.characterId;
       const results =
-        (p.mode === "task" || !p.ok) && !watching
+        (p.worked || !p.ok) && !watching
           ? { ...s.results, [p.characterId]: { ok: p.ok, conversationId: p.conversationId } }
           : s.results;
       return { ...s, runs, streaming, results, convVersion: s.convVersion + 1 };
@@ -180,7 +184,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             if (!c || watching) return;
             if (!p.ok) {
               dispatch({ type: "toast", toast: { characterId: c.id, kind: "error", text: `${c.name} 遇到了问题，点她看看吧` } });
-            } else if (p.mode === "task") {
+            } else if (p.worked) {
               dispatch({ type: "toast", toast: { characterId: c.id, kind: "done", text: `${c.name} 完成了任务！` } });
             } else {
               dispatch({ type: "toast", toast: { characterId: c.id, kind: "info", text: `${c.name} 回复了你` } });
@@ -210,7 +214,7 @@ export function useStore() {
 /** Activity derived from runs/results; "bored" is layered on top by the sprite's idle timer. */
 export function baseActivity(state: State, characterId: string): Activity {
   const run = state.runs[characterId];
-  if (run) return run.mode === "task" ? "working" : "chatting";
+  if (run) return run.working ? "working" : "chatting";
   const res = state.results[characterId];
   if (res) return res.ok ? "done" : "error";
   return "reading";

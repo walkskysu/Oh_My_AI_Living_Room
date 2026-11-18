@@ -28,7 +28,8 @@ pub struct Settings {
 struct RunInfo {
     run_id: String,
     conversation_id: String,
-    mode: String,
+    /// Became real work (used a tool or ran longer than WORK_AFTER).
+    working: bool,
     cancel: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -82,7 +83,7 @@ struct ActiveRun {
     character_id: String,
     conversation_id: String,
     run_id: String,
-    mode: String,
+    working: bool,
 }
 
 #[derive(Serialize)]
@@ -107,7 +108,7 @@ fn bootstrap(state: State<'_, AppState>) -> Bootstrap {
                 character_id: cid.clone(),
                 conversation_id: r.conversation_id.clone(),
                 run_id: r.run_id.clone(),
-                mode: r.mode.clone(),
+                working: r.working,
             })
             .collect(),
     }
@@ -217,6 +218,50 @@ fn open_workspace(app: AppHandle, state: State<'_, AppState>, character_id: Stri
         .map_err(err)
 }
 
+/// Resolve a path the agent mentioned to a real file inside the character's workspace.
+fn workspace_file(state: &AppState, character_id: &str, path: &str) -> Result<PathBuf, String> {
+    let ws = state
+        .workspace(character_id)
+        .canonicalize()
+        .map_err(|_| "工作目录不存在".to_string())?;
+    let p = PathBuf::from(path.trim());
+    let p = if p.is_absolute() { p } else { ws.join(p) };
+    let p = p
+        .canonicalize()
+        .map_err(|_| "找不到这个文件，可能已被移动或删除".to_string())?;
+    if !p.starts_with(&ws) {
+        return Err("只能打开她工作目录里的文件".into());
+    }
+    Ok(p)
+}
+
+/// Which of these mentioned paths are real files in the workspace (for file cards).
+#[tauri::command]
+fn existing_files(state: State<'_, AppState>, character_id: String, paths: Vec<String>) -> Vec<bool> {
+    paths
+        .iter()
+        .map(|p| workspace_file(&state, &character_id, p).map(|f| f.is_file()).unwrap_or(false))
+        .collect()
+}
+
+/// Open a file the character produced, with the system's default app.
+/// Only files inside that character's workspace; scripts/executables are
+/// revealed in the file manager instead of being run.
+#[tauri::command]
+fn open_file(app: AppHandle, state: State<'_, AppState>, character_id: String, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let p = workspace_file(&state, &character_id, &path)?;
+    const RISKY: &[&str] = &[
+        "exe", "bat", "cmd", "com", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "msi", "msix", "lnk", "scr",
+        "pif", "reg", "jar", "sh", "bash", "zsh", "run", "appimage", "desktop", "py", "pyw", "app", "command",
+    ];
+    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if p.is_dir() || RISKY.contains(&ext.as_str()) {
+        return app.opener().reveal_item_in_dir(&p).map_err(err);
+    }
+    app.opener().open_path(p.to_string_lossy(), None::<&str>).map_err(err)
+}
+
 #[tauri::command]
 fn cancel_run(state: State<'_, AppState>, character_id: String) -> Result<(), String> {
     if let Some(r) = state.runs.lock().unwrap().get_mut(&character_id) {
@@ -252,11 +297,15 @@ struct StatusPayload {
     character_id: String,
     conversation_id: String,
     run_id: String,
-    /// "running" | "finished"
+    /// "running" (replying) | "working" (doing real work) | "finished"
     status: String,
-    mode: String,
+    /// Whether this run turned into work (drives the "done" celebration).
+    worked: bool,
     ok: bool,
 }
+
+/// A reply that takes longer than this counts as work even without tool calls.
+const WORK_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn make_title(text: &str) -> String {
     let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -277,7 +326,6 @@ async fn send_message(
     character_id: String,
     conversation_id: Option<String>,
     text: String,
-    mode: String,
 ) -> Result<SendResult, String> {
     let text = text.trim().to_string();
     if text.is_empty() {
@@ -315,7 +363,7 @@ async fn send_message(
                 .map_err(err)?,
         };
         let msg = db
-            .add_message(&conv.id, "user", &text, &json!({ "mode": mode }))
+            .add_message(&conv.id, "user", &text, &json!({}))
             .map_err(err)?;
         let conv = db.get_conversation(&conv.id).map_err(err)?.unwrap();
         (conv, msg)
@@ -352,7 +400,7 @@ async fn send_message(
         RunInfo {
             run_id: run_id.clone(),
             conversation_id: conversation.id.clone(),
-            mode: mode.clone(),
+            working: false,
             cancel: Some(cancel_tx),
         },
     );
@@ -363,13 +411,13 @@ async fn send_message(
             conversation_id: conversation.id.clone(),
             run_id: run_id.clone(),
             status: "running".into(),
-            mode: mode.clone(),
+            worked: false,
             ok: true,
         },
     );
 
     // Feed the prompt through stdin.
-    let prompt = agent::compose_prompt(&text, &mode);
+    let prompt = text.clone();
     if let Some(mut stdin) = child.stdin.take() {
         tauri::async_runtime::spawn(async move {
             let _ = stdin.write_all(prompt.as_bytes()).await;
@@ -385,7 +433,6 @@ async fn send_message(
         character_id.clone(),
         conversation.id.clone(),
         run_id.clone(),
-        mode,
     ));
 
     Ok(SendResult {
@@ -404,7 +451,6 @@ async fn drive_run(
     character_id: String,
     conversation_id: String,
     run_id: String,
-    mode: String,
 ) {
     let state = app.state::<AppState>();
     let stderr_buf = Arc::new(Mutex::new(String::new()));
@@ -421,6 +467,9 @@ async fn drive_run(
     let mut last_tool: Option<Message> = None;
     let mut finished: Option<(bool, Option<String>)> = None;
     let mut cancelled = false;
+    let mut working = false;
+    let work_timer = tokio::time::sleep(WORK_AFTER);
+    tokio::pin!(work_timer);
 
     let emit = |event: AgentEvent, message: Option<Message>| {
         let _ = app.emit(
@@ -435,8 +484,31 @@ async fn drive_run(
         );
     };
 
+    // Promote the run from "replying" to "working" (shown as the working pose).
+    let promote = |working: &mut bool| {
+        if *working {
+            return;
+        }
+        *working = true;
+        if let Some(r) = state.runs.lock().unwrap().get_mut(&character_id) {
+            r.working = true;
+        }
+        let _ = app.emit(
+            "agent-status",
+            StatusPayload {
+                character_id: character_id.clone(),
+                conversation_id: conversation_id.clone(),
+                run_id: run_id.clone(),
+                status: "working".into(),
+                worked: true,
+                ok: true,
+            },
+        );
+    };
+
     loop {
         tokio::select! {
+            _ = &mut work_timer, if !working => promote(&mut working),
             line = lines.next_line() => {
                 let line = match line { Ok(Some(l)) => l, _ => break };
                 for ev in agent::parse_line(provider, &line) {
@@ -473,6 +545,9 @@ async fn drive_run(
                             }
                             AgentEvent::Delta { .. } => {}
                         }
+                    }
+                    if matches!(ev, AgentEvent::Tool { .. }) {
+                        promote(&mut working);
                     }
                     emit(ev, persisted);
                 }
@@ -527,7 +602,7 @@ async fn drive_run(
             conversation_id: conversation_id.clone(),
             run_id: run_id.clone(),
             status: "finished".into(),
-            mode,
+            worked: working,
             ok: finished.map(|f| f.0).unwrap_or(false),
         },
     );
@@ -601,6 +676,8 @@ pub fn run() {
             delete_conversation,
             rename_conversation,
             open_workspace,
+            open_file,
+            existing_files,
             cancel_run,
             send_message,
         ])

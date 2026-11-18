@@ -1,5 +1,4 @@
 export type Activity = "reading" | "bored" | "working" | "chatting" | "done" | "error";
-export type Mode = "chat" | "task";
 export type ProviderId = "claude" | "codex";
 
 /** A pose: either a still image (animated with CSS) or a sprite sheet (TexturePacker JSON hash). */
@@ -85,8 +84,10 @@ export interface StatusPayload {
   characterId: string;
   conversationId: string;
   runId: string;
-  status: "running" | "finished";
-  mode: Mode;
+  /** running = replying; working = real work (tool use or long run); finished */
+  status: "running" | "working" | "finished";
+  /** The run turned into work at some point. */
+  worked: boolean;
   ok: boolean;
 }
 
@@ -94,7 +95,7 @@ export interface ActiveRun {
   characterId: string;
   conversationId: string;
   runId: string;
-  mode: Mode;
+  working: boolean;
 }
 
 export interface Bootstrap {

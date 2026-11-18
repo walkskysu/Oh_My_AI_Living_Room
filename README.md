@@ -1,6 +1,6 @@
 # Oh My AI Living Room
 
-一个温馨的「AI 客厅」桌面程序：客厅里住着几位角色，每位角色背后都是一个 CLI coding agent（Claude Code / Codex），有自己的人设、专长和 skills。点角色就能聊天或派任务；她们在无聊、工作中、完成时会有不同的动画。
+一个温馨的「AI 客厅」桌面程序：客厅里住着几位角色，每位角色背后都是一个 CLI coding agent（Claude Code / Codex），有自己的人设、专长和 skills。点角色就能聊天或交代任务；她们在无聊、工作中、完成时会有不同的动画。
 
 第一版（v0.1）：Tauri 2 + React，已实现角色 **Iris（艾莉丝）**，支持 Claude Code 与 Codex 两种 harness，所有对话存进 SQLite。
 
@@ -46,9 +46,9 @@ Windows 下数据（对话库、设置、角色工作目录）在 `%APPDATA%\ohm
 | | |
 |---|---|
 | 客厅场景 | `public/background.jpg` 铺满窗口（cover），角色按 1672×941 舞台坐标摆放 |
-| 角色状态 | 看书（默认）→ 闲置 `boredAfterSec` 秒后**发呆**（打哈欠）→ 派任务时**工作中**（戴眼镜写笔记）→ 任务完成**完成啦**（比 V），点她查看后回到看书。聊天回复中显示「…」气泡 |
+| 角色状态 | 看书（默认）→ 闲置 `boredAfterSec` 秒后**发呆**（打哈欠）→ 她开始动手（调用工具读写文件、执行命令等，或一轮回复超过 10 秒）时自动切到**工作中**（戴眼镜写笔记）→ 这一轮结束后**完成啦**（比 V），点她查看后回到看书。纯聊天回复中保持看书并显示「…」气泡 |
 | 动画 | Rigby2D 骨骼动画导出的序列帧（呼吸、眨眼、点头、头发摆动、挥手），四个姿势共用同一画框，切换时淡入淡出 |
-| 对话框 | 点角色（像素级命中）打开：💬 聊天 / 📋 派任务、流式回复、工具调用折叠行、停止按钮、新对话、历史记录（重命名/删除）、「关于她」（人设、专长、skills、harness/模型/权限设置） |
+| 对话框 | 点角色（像素级命中）打开：单一输入框（不分聊天/任务，是否「工作」由后端按工具调用和耗时自动判断）、流式回复、工具调用折叠行、停止按钮、新对话、历史记录（重命名/删除）、「关于她」（人设、专长、skills、harness/模型/权限设置） |
 | Agent | 每个角色在自己的工作目录里运行 harness：`~/.local/share/com.ohmyai.livingroom/workspaces/<id>/`，产出放 `outputs/` |
 | 存储 | `~/.local/share/com.ohmyai.livingroom/living_room.db`：`conversations`（含 harness session id，用于续聊）+ `messages`（user / assistant / tool / error / system） |
 | 通知 | 对话框关闭时任务完成/出错会弹出 toast，点 toast 直接打开那段对话 |
@@ -57,12 +57,12 @@ Windows 下数据（对话库、设置、角色工作目录）在 `%APPDATA%\ohm
 
 | | Claude Code | Codex |
 |---|---|---|
-| 命令 | `claude -p --output-format stream-json --verbose --include-partial-messages --permission-mode <mode> --append-system-prompt <persona> [--model m] [--resume <sid>]` | `codex exec --json --skip-git-repo-check --sandbox workspace-write [--model m] [resume <thread>] -` |
-| 人设 | `--append-system-prompt` | 工作目录里的 `AGENTS.md` |
+| 命令 | `claude -p --output-format stream-json --verbose --include-partial-messages --permission-mode <mode> --append-system-prompt-file <workspace>/.living-room/persona.md [--model m] [--resume <sid>]` | `codex exec --json --skip-git-repo-check --sandbox workspace-write [--model m] [resume <thread>] -` |
+| 人设 | `--append-system-prompt-file` | 工作目录里的 `AGENTS.md` |
 | Skills | 复制到 `<workspace>/.claude/skills/`（项目级 skills） | 在 `AGENTS.md` 里列出并指向 SKILL.md |
 | 续聊 | `system/init.session_id` | `thread.started.thread_id` |
 
-两种输出都被解析成统一事件：`session / delta / message / tool / toolResult / done`，通过 Tauri 事件 `agent-event`、`agent-status` 推给前端。Prompt 走 stdin。GUI 启动时会自动把 `~/.local/bin`、`~/.npm-global/bin` 等加入 PATH，也可在设置里手动指定 CLI 路径。
+两种输出都被解析成统一事件：`session / delta / message / tool / toolResult / done`，通过 Tauri 事件 `agent-event`、`agent-status`（`running` → `working` → `finished`，带 `worked` 标记）推给前端。Prompt 走 stdin。GUI 启动时会自动把 `~/.local/bin`、`~/.npm-global/bin` 等加入 PATH，也可在设置里手动指定 CLI 路径。
 
 > 已在 Linux（WSL2/WSLg）用 Claude Code 2.1.327 实测聊天、续聊、派任务写文件、使用 skill。Codex 适配按 `codex exec --json` 的事件格式实现并有单元测试，但本机未安装 codex，尚未实机验证。
 

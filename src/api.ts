@@ -4,7 +4,6 @@ import type {
   Conversation,
   EventPayload,
   Message,
-  Mode,
   Settings,
   StatusPayload,
 } from "./types";
@@ -22,12 +21,13 @@ export interface Api {
   deleteConversation(conversationId: string): Promise<void>;
   renameConversation(conversationId: string, title: string): Promise<void>;
   openWorkspace(characterId: string): Promise<void>;
+  openFile(characterId: string, path: string): Promise<void>;
+  existingFiles(characterId: string, paths: string[]): Promise<boolean[]>;
   cancelRun(characterId: string): Promise<void>;
   sendMessage(args: {
     characterId: string;
     conversationId: string | null;
     text: string;
-    mode: Mode;
   }): Promise<{ conversation: Conversation; userMessage: Message; runId: string }>;
   onAgentEvent(cb: (p: EventPayload) => void): Promise<Unlisten>;
   onAgentStatus(cb: (p: StatusPayload) => void): Promise<Unlisten>;
@@ -46,6 +46,8 @@ async function tauriApi(): Promise<Api> {
     renameConversation: (conversationId, title) =>
       invoke("rename_conversation", { conversationId, title }),
     openWorkspace: (characterId) => invoke("open_workspace", { characterId }),
+    openFile: (characterId, path) => invoke("open_file", { characterId, path }),
+    existingFiles: (characterId, paths) => invoke("existing_files", { characterId, paths }),
     cancelRun: (characterId) => invoke("cancel_run", { characterId }),
     sendMessage: (args) => invoke("send_message", args),
     onAgentEvent: (cb) => listen<EventPayload>("agent-event", (e) => cb(e.payload)),
@@ -86,19 +88,24 @@ async function mockApi(): Promise<Api> {
       if (c) c.title = title;
     },
     openWorkspace: async () => {},
+    openFile: async (_c, path) => alert(`(浏览器预览) 打开 ${path}`),
+    existingFiles: async (_c, paths) => paths.map(() => true),
     cancelRun: async () => {},
-    sendMessage: async ({ characterId, conversationId, text, mode }) => {
+    sendMessage: async ({ characterId, conversationId, text }) => {
       let conv = convs.find((c) => c.id === conversationId);
       if (!conv) {
         conv = { id: crypto.randomUUID(), characterId, title: text.slice(0, 24), provider: "claude", createdAt: now(), updatedAt: now(), messageCount: 0 };
         convs.unshift(conv);
       }
-      const userMessage = add(conv.id, "user", text, { mode });
+      const userMessage = add(conv.id, "user", text);
       const runId = crypto.randomUUID();
       const c = conv;
       const base = { runId, characterId, conversationId: c.id };
-      setTimeout(() => statusCbs.forEach((f) => f({ ...base, status: "running", mode, ok: true })), 10);
-      const reply = mode === "task" ? "好的，这个任务交给我吧！我已经整理好了笔记，保存在 `outputs/读书笔记.md`。" : "嗯嗯，我在听哦～这是浏览器预览模式，真正的回复需要在桌面程序里运行。";
+      // mock: messages that sound like work use a tool, which flips her into the working pose
+      const work = /整理|笔记|写|保存|文件|save|write/i.test(text);
+      setTimeout(() => statusCbs.forEach((f) => f({ ...base, status: "running", worked: false, ok: true })), 10);
+      if (work) setTimeout(() => statusCbs.forEach((f) => f({ ...base, status: "working", worked: true, ok: true })), 400);
+      const reply = work ? "好的，这个任务交给我吧！我已经整理好了笔记，保存在 `outputs/读书笔记.md`。" : "嗯嗯，我在听哦～这是浏览器预览模式，真正的回复需要在桌面程序里运行。";
       let i = 0;
       const tick = setInterval(() => {
         if (i < reply.length) {
@@ -107,7 +114,7 @@ async function mockApi(): Promise<Api> {
           return;
         }
         clearInterval(tick);
-        if (mode === "task") {
+        if (work) {
           const t = add(c.id, "tool", "outputs/读书笔记.md", { name: "Write", ok: true });
           eventCbs.forEach((f) => f({ ...base, event: { kind: "tool", name: "Write", summary: t.content }, message: t }));
         }
@@ -115,8 +122,8 @@ async function mockApi(): Promise<Api> {
         eventCbs.forEach((f) => f({ ...base, event: { kind: "message", text: reply }, message: m }));
         const d = add(c.id, "system", "done", { durationMs: 2400, costUsd: 0.01 });
         eventCbs.forEach((f) => f({ ...base, event: { kind: "done", ok: true, durationMs: 2400, costUsd: 0.01 }, message: d }));
-        statusCbs.forEach((f) => f({ ...base, status: "finished", mode, ok: true }));
-      }, mode === "task" ? 120 : 40);
+        statusCbs.forEach((f) => f({ ...base, status: "finished", worked: work, ok: true }));
+      }, work ? 120 : 40);
       return { conversation: c, userMessage, runId };
     },
     onAgentEvent: async (cb) => {
