@@ -105,7 +105,7 @@ async function mockApi(): Promise<Api> {
       const work = /整理|笔记|写|保存|文件|save|write/i.test(text);
       setTimeout(() => statusCbs.forEach((f) => f({ ...base, status: "running", worked: false, ok: true })), 10);
       if (work) setTimeout(() => statusCbs.forEach((f) => f({ ...base, status: "working", worked: true, ok: true })), 400);
-      const reply = work ? "好的，这个任务交给我吧！我已经整理好了笔记，保存在 `outputs/读书笔记.md`。" : "嗯嗯，我在听哦～这是浏览器预览模式，真正的回复需要在桌面程序里运行。";
+      const reply = work ? "好的，这个任务交给我吧！我已经整理好了笔记，保存在 `outputs/读书笔记.pdf`。" : "嗯嗯，我在听哦～这是浏览器预览模式，真正的回复需要在桌面程序里运行。";
       let i = 0;
       const tick = setInterval(() => {
         if (i < reply.length) {
@@ -115,7 +115,7 @@ async function mockApi(): Promise<Api> {
         }
         clearInterval(tick);
         if (work) {
-          const t = add(c.id, "tool", "outputs/读书笔记.md", { name: "Write", ok: true });
+          const t = add(c.id, "tool", "outputs/读书笔记.pdf", { name: "Write", ok: true });
           eventCbs.forEach((f) => f({ ...base, event: { kind: "tool", name: "Write", summary: t.content }, message: t }));
         }
         const m = add(c.id, "assistant", reply);

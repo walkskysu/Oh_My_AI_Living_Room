@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>{{标题}}</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Micro Hei", sans-serif;
+    color: #2b2b2b; line-height: 1.75; font-size: 11pt; margin: 0;
+  }
+  h1 { font-size: 22pt; margin: 0 0 6pt; color: #3a2f5b; }
+  .summary { border-left: 4px solid #b39ddb; background: #f5f1fb; padding: 8pt 12pt; margin: 0 0 16pt; color: #4a3f6b; }
+  h2 { font-size: 14pt; color: #5e4b8b; border-bottom: 1px solid #e3dcf0; padding-bottom: 3pt; margin: 18pt 0 8pt; }
+  ol, ul { padding-left: 20pt; margin: 0; }
+  li { margin: 3pt 0; }
+  blockquote { margin: 6pt 0; padding: 4pt 12pt; border-left: 3px solid #d7ccc8; color: #5d4037; font-style: italic; }
+  .afterword { background: #fffaf0; border-radius: 6pt; padding: 8pt 12pt; }
+  .meta { color: #999; font-size: 9pt; margin-top: 20pt; text-align: right; }
+  h2, li, blockquote { break-inside: avoid; }
+</style>
+</head>
+<body>
+  <h1>{{标题}}</h1>
+  <div class="summary">一句话概括：{{……}}</div>
+
+  <h2>核心要点</h2>
+  <ol>
+    <li>{{……}}</li>
+  </ol>
+
+  <h2>细节与证据</h2>
+  <ul>
+    <li>{{……}}</li>
+  </ul>
+
+  <h2>金句摘录</h2>
+  <blockquote>「{{……}}」</blockquote>
+
+  <h2>Iris 的读后感</h2>
+  <div class="afterword">{{两三句真诚的个人看法，以及可能的疑问或值得延伸阅读的方向。}}</div>
+
+  <div class="meta">Iris 整理 · {{日期}}</div>
+</body>
+</html>
