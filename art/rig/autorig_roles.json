@@ -1,0 +1,19 @@
+{
+  "_note": "autorig overrides used per pose (ik: false). Arms/props ride the torso; eye whites/lashes are eyes.",
+  "reading": {
+    "roles": {"ribbon": "hair", "eyewhite_r": "eye", "eyewhite_l": "eye", "eyelash_r": "eye", "eyelash_l": "eye", "prop": "torso", "arms": "torso"},
+    "sides": {"eyewhite_r": "r", "eyewhite_l": "l", "eyelash_r": "r", "eyelash_l": "l", "prop": null, "arms": null}
+  },
+  "bored": {
+    "roles": {"ribbon": "hair", "eyelash_r": "eye", "eyelash_l": "eye", "prop": "torso", "arm_l": "torso", "arm_r": "torso", "skirt": "pelvis", "skirt2": "pelvis", "ears_l": "ear", "ears_r": "ear", "mouth": "mouth"},
+    "sides": {"eyelash_r": "r", "eyelash_l": "l", "prop": null, "arm_l": null, "arm_r": null, "ears_l": "l", "ears_r": "r"}
+  },
+  "working": {
+    "roles": {"ribbon": "hair", "eyewhite_r": "eye", "eyewhite_l": "eye", "eyelash_r": "eye", "eyelash_l": "eye", "prop": "torso", "arm_l": "torso", "glasses": "head", "skirt": "pelvis"},
+    "sides": {"eyewhite_r": "r", "eyewhite_l": "l", "eyelash_r": "r", "eyelash_l": "l", "prop": null, "arm_l": null, "glasses": null}
+  },
+  "done": {
+    "roles": {"ribbon": "hair", "eyelash_r": "eye", "eyelash_l": "eye", "prop": "torso", "arm_l": "torso", "arm_r": "arm", "skirt": "pelvis", "skirt2": "pelvis", "ears_l": "ear", "ears_r": "ear", "mouth": "mouth"},
+    "sides": {"eyelash_r": "r", "eyelash_l": "l", "prop": null, "arm_l": null, "arm_r": "r", "ears_l": "l", "ears_r": "r"}
+  }
+}
