@@ -64,6 +64,10 @@ pub struct RunSpec<'a> {
     pub model: Option<&'a str>,
     pub permission_mode: &'a str,
     pub resume: Option<&'a str>,
+    /// Claude Code `--allowedTools` rules (pre-approved commands for headless runs).
+    pub allowed_tools: Vec<String>,
+    /// Extra environment variables for the agent process (e.g. COMFYUI_URL).
+    pub env: Vec<(String, String)>,
 }
 
 /// Build the command line. The prompt itself is written to stdin.
@@ -82,6 +86,11 @@ pub fn build_command(spec: &RunSpec) -> tokio::process::Command {
                 spec.permission_mode,
             ]);
             cmd.arg("--append-system-prompt-file").arg(spec.persona_file);
+            if !spec.allowed_tools.is_empty() {
+                // one comma-separated value: rules contain spaces, and a single
+                // argument keeps the following flags from being read as rules
+                cmd.arg("--allowedTools").arg(spec.allowed_tools.join(","));
+            }
             if let Some(m) = spec.model.filter(|m| !m.is_empty()) {
                 cmd.args(["--model", m]);
             }
@@ -108,6 +117,11 @@ pub fn build_command(spec: &RunSpec) -> tokio::process::Command {
         }
     }
     cmd.env("PATH", augmented_path());
+    // Lets skills tell which harness they run under.
+    cmd.env("LIVING_ROOM_HARNESS", spec.provider.as_str());
+    for (k, v) in &spec.env {
+        cmd.env(k, v);
+    }
     #[cfg(windows)]
     {
         // Don't flash a console window for every agent run.

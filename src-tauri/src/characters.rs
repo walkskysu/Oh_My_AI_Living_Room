@@ -4,6 +4,7 @@
 //! Claude Code skills under `characters/<id>/skills/<skill>/SKILL.md`.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,8 +55,22 @@ pub struct Character {
     /// Idle chatter shown in speech bubbles per activity.
     #[serde(default)]
     pub lines: serde_json::Value,
+    /// Per-character status pill wording, e.g. { "reading": "画画中" }.
+    #[serde(default)]
+    pub activity_labels: serde_json::Value,
     #[serde(default)]
     pub bored_after_sec: Option<u64>,
+    /// Extra persona text per harness ("claude" / "codex"), e.g. which image
+    /// tool to use. Claude's goes into persona.md, Codex's into AGENTS.md.
+    #[serde(default)]
+    pub harness_notes: HashMap<String, String>,
+    /// Claude Code permission rules the character may always use, e.g. the
+    /// scripts her skills run (`Bash(python3 .claude/skills/x/run.py:*)`).
+    /// Headless runs can't ask for approval, so these are passed as
+    /// `--allowedTools` (a project `.claude/settings.json` would be ignored
+    /// until the workspace is trusted interactively).
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
     /// Names of skills bundled with the character (filled in at load time).
     #[serde(default)]
     pub skills: Vec<SkillInfo>,
@@ -158,7 +173,7 @@ pub fn prepare_workspace(c: &Character, ws: &Path) -> std::io::Result<()> {
     if skills_src.is_dir() {
         copy_dir(&skills_src, &ws.join(".claude").join("skills"))?;
     }
-    let mut agents_md = format!("# {}\n\n{}\n", c.name, c.persona);
+    let mut agents_md = format!("# {}\n\n{}\n", c.name, with_notes(c, "codex"));
     if !c.skills.is_empty() {
         agents_md.push_str("\n## Skills\n\nDetailed instructions for each skill are in `.claude/skills/<name>/SKILL.md`; read the file before using the skill.\n\n");
         for s in &c.skills {
@@ -167,8 +182,31 @@ pub fn prepare_workspace(c: &Character, ws: &Path) -> std::io::Result<()> {
     }
     std::fs::write(ws.join("AGENTS.md"), agents_md)?;
     std::fs::create_dir_all(ws.join(".living-room"))?;
-    std::fs::write(persona_file(ws), &c.persona)?;
+    std::fs::write(persona_file(ws), with_notes(c, "claude"))?;
     Ok(())
+}
+
+/// The persona plus the harness-specific notes for `provider`, if any.
+fn with_notes(c: &Character, provider: &str) -> String {
+    match c.harness_notes.get(provider).map(|n| n.trim()).filter(|n| !n.is_empty()) {
+        Some(n) => format!("{}\n\n{}", c.persona.trim_end(), n),
+        None => c.persona.clone(),
+    }
+}
+
+/// `allowed_tools`, plus a variant with the absolute workspace path for every rule
+/// that names a workspace-relative `.claude/` path (agents sometimes call scripts
+/// by their full path).
+pub fn allowed_tools(c: &Character, ws: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for rule in &c.allowed_tools {
+        out.push(rule.clone());
+        if rule.contains(" .claude/") {
+            let abs = format!("{}/.claude/", ws.to_string_lossy().replace('\\', "/"));
+            out.push(rule.replacen(" .claude/", &format!(" {abs}"), 1));
+        }
+    }
+    out
 }
 
 /// Where the persona text for `--append-system-prompt-file` is written.

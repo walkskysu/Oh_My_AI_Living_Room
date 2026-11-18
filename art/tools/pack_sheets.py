@@ -7,10 +7,12 @@ inside sourceSize (the canonical frame), so all poses line up exactly.
 import json, os, sys
 from PIL import Image
 
-SRC = '/mnt/e/rig_projects/iris/sheets'
-DST = '/home/walksky/workspace/Oh_My_AI_Living_Room/public/characters/iris/anim'
+CHAR = os.environ.get('CHAR', 'iris')    # CHAR=poppy python pack_sheets.py reading bored ...
+SRC = f'/mnt/e/rig_projects/{CHAR}/sheets'
+DST = f'/home/walksky/workspace/Oh_My_AI_Living_Room/public/characters/{CHAR}/anim'
 S = 0.6                      # export scale (pixels per canvas px)
-CROP = (96, 8, 904, 1016)    # canonical frame in seethrough canvas px
+# canonical frame in seethrough canvas px (per character: covers every pose)
+CROP = {'iris': (96, 8, 904, 1016), 'poppy': (150, 4, 874, 1020)}[CHAR]
 ORIGIN = (512, 1024)         # skeleton origin in canvas px (autorig: bottom centre)
 CW, CH = round((CROP[2] - CROP[0]) * S), round((CROP[3] - CROP[1]) * S)
 R = 0.75                     # final downscale of every cell (keeps decoded sheets small)

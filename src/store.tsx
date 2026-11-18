@@ -228,3 +228,8 @@ export const activityLabel: Record<Activity, string> = {
   done: "完成啦",
   error: "出错了",
 };
+
+/** Status label, with per-character wording (e.g. Poppy paints instead of reads). */
+export function labelFor(c: { activityLabels?: Partial<Record<Activity, string>> }, a: Activity) {
+  return c.activityLabels?.[a] ?? activityLabel[a];
+}

@@ -5,3 +5,6 @@ src-tauri/gen
 art/gen
 art/layers
 *.log
+art/poppy/gen
+art/poppy/layers
+art/poppy/src/_*
