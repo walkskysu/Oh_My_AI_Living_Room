@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { activityLabel, baseActivity, useStore } from "../store";
-import type { AgentConfig, Character, Conversation, Message, Mode } from "../types";
+import type { AgentConfig, Character, Conversation, Message } from "../types";
 import { Markdown } from "./Markdown";
+import { extractFiles, FileCards } from "./FileCards";
 
 type Tab = "chat" | "history" | "profile";
 
@@ -16,18 +17,17 @@ function fmtTime(iso: string) {
     : d.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-const suggestions: Record<string, { text: string; mode: Mode }[]> = {
+const suggestions: Record<string, string[]> = {
   iris: [
-    { text: "推荐一本适合周末读的小说", mode: "chat" },
-    { text: "帮我把这段话润色得更自然：", mode: "chat" },
-    { text: "读一下 https://example.com 这篇文章，整理成读书笔记", mode: "task" },
+    "推荐一本适合周末读的小说",
+    "帮我把这段话润色得更自然：",
+    "读一下 https://example.com 这篇文章，整理成读书笔记",
   ],
 };
 
 export function ChatPanel({ character }: { character: Character }) {
   const { state, dispatch, api } = useStore();
   const [tab, setTab] = useState<Tab>("chat");
-  const [mode, setMode] = useState<Mode>("chat");
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,21 +68,20 @@ export function ChatPanel({ character }: { character: Character }) {
     if (tab === "chat") inputRef.current?.focus();
   }, [tab, convId]);
 
-  const send = async (override?: { text: string; mode: Mode }) => {
-    const body = (override?.text ?? text).trim();
-    const m = override?.mode ?? mode;
+  const send = async () => {
+    const body = text.trim();
     if (!body || !api || sending || run) return;
     setSending(true);
     setError(null);
     try {
-      const res = await api.sendMessage({ characterId: character.id, conversationId: convId, text: body, mode: m });
+      const res = await api.sendMessage({ characterId: character.id, conversationId: convId, text: body });
       if (!convId) {
         dispatch({ type: "setMessages", conversationId: res.conversation.id, messages: [res.userMessage] });
         dispatch({ type: "setActiveConversation", characterId: character.id, conversationId: res.conversation.id });
       } else {
         dispatch({ type: "upsertMessage", message: res.userMessage });
       }
-      if (!override) setText("");
+      setText("");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -151,28 +150,30 @@ export function ChatPanel({ character }: { character: Character }) {
                 <div className="suggest">
                   {(suggestions[character.id] ?? []).map((s) => (
                     <button
-                      key={s.text}
+                      key={s}
                       onClick={() => {
-                        setMode(s.mode);
-                        setText(s.text);
+                        setText(s);
                         inputRef.current?.focus();
                       }}
                     >
-                      {s.mode === "task" ? "📋 " : "💬 "}
-                      {s.text}
+                      💬 {s}
                     </button>
                   ))}
                 </div>
               </div>
             )}
-            {messages.map((m) => (
-              <MessageRow key={m.id} m={m} character={character} />
-            ))}
+            {groupTools(messages).map((g, i, all) =>
+              Array.isArray(g) ? (
+                <ActivityRow key={g[0].id} steps={g} live={runningHere && i === all.length - 1} />
+              ) : (
+                <MessageRow key={g.id} m={g} character={character} />
+              ),
+            )}
             {runningHere && (
               <div className="msg assistant">
                 <img className="avatar" src={`/characters/${character.id}/avatar.png`} alt="" />
                 <div className="bubble-msg streaming">
-                  {streaming ? <Markdown text={streaming} /> : <span className="typing"><i /><i /><i /></span>}
+                  {streaming ? <Markdown text={extractFiles(streaming).text} /> : <span className="typing"><i /><i /><i /></span>}
                 </div>
               </div>
             )}
@@ -186,20 +187,16 @@ export function ChatPanel({ character }: { character: Character }) {
           )}
           {error && <div className="error-note" onClick={() => setError(null)}>{error}</div>}
 
-          <div className={`composer mode-${mode}`}>
-            <div className="mode-switch">
-              <button className={mode === "chat" ? "on" : ""} onClick={() => setMode("chat")}>💬 聊天</button>
-              <button className={mode === "task" ? "on" : ""} onClick={() => setMode("task")}>📋 派任务</button>
-              <span className="hint">
-                {mode === "task" ? "她会在自己的工作目录里完成任务，产出放在 outputs/" : "Enter 发送 · Shift+Enter 换行"}
-              </span>
+          <div className="composer">
+            <div className="composer-hint">
+              需要动手时她会自己开始工作 · Enter 发送，Shift+Enter 换行
             </div>
             <div className="input-row">
               <textarea
                 ref={inputRef}
                 value={text}
                 rows={2}
-                placeholder={mode === "task" ? `交给 ${character.name} 一个任务…` : `和 ${character.name} 说点什么…`}
+                placeholder={`和 ${character.name} 说点什么，或交给她一件事…`}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -212,7 +209,7 @@ export function ChatPanel({ character }: { character: Character }) {
                 <button className="send stop" onClick={() => api?.cancelRun(character.id)}>停止</button>
               ) : (
                 <button className="send" onClick={() => send()} disabled={!text.trim() || sending}>
-                  {mode === "task" ? "交给她" : "发送"}
+                  发送
                 </button>
               )}
             </div>
@@ -300,11 +297,6 @@ export function ChatPanel({ character }: { character: Character }) {
 }
 
 function MessageRow({ m, character }: { m: Message; character: Character }) {
-  const [open, setOpen] = useState(false);
-  const { state } = useStore();
-  // normalise separators so Windows paths (C:\\...\\workspaces\\iris\\x) shorten too
-  const norm = (p: string) => p.replace(/\\/g, "/");
-  const ws = norm(`${state.dataDir}/workspaces/${character.id}/`);
   if (m.role === "user") {
     return (
       <div className="msg user">
@@ -319,20 +311,7 @@ function MessageRow({ m, character }: { m: Message; character: Character }) {
     return (
       <div className="msg assistant">
         <img className="avatar" src={`/characters/${character.id}/avatar.png`} alt="" />
-        <div className="bubble-msg"><Markdown text={m.content} /></div>
-      </div>
-    );
-  }
-  if (m.role === "tool") {
-    const ok = m.meta?.ok;
-    return (
-      <div className={`tool-row ${ok === false ? "bad" : ""}`}>
-        <button onClick={() => setOpen(!open)}>
-          <span className="tool-icon">{ok === undefined ? "⏳" : ok ? "🔧" : "⚠️"}</span>
-          <b>{m.meta?.name}</b>
-          <span className="tool-sum" title={m.content}>{norm(m.content).split(ws).join("")}</span>
-        </button>
-        {open && m.meta?.output && <pre>{m.meta.output}</pre>}
+        <AssistantBody text={m.content} characterId={character.id} />
       </div>
     );
   }
@@ -383,6 +362,71 @@ function HistoryRow(props: {
           <button title="删除" onClick={() => setConfirm(true)}>🗑</button>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Friendly, non-technical description of what a tool call means. */
+function friendlyTool(name: string = ""): { icon: string; text: string } {
+  const n = name.toLowerCase();
+  if (/^(read|glob|grep|ls|notebookread)$/.test(n)) return { icon: "📖", text: "翻阅资料" };
+  if (/^(write|edit|multiedit|notebookedit|apply_patch)$/.test(n)) return { icon: "✍️", text: "动笔写写改改" };
+  if (/^(bash|shell|powershell|bashoutput|killshell|monitor)$/.test(n)) return { icon: "🛠️", text: "动手处理" };
+  if (n === "websearch") return { icon: "🔎", text: "上网查资料" };
+  if (n === "webfetch") return { icon: "🌐", text: "阅读网页" };
+  if (n === "skill") return { icon: "📚", text: "翻开技能手册" };
+  if (n === "task" || n === "agent") return { icon: "🤝", text: "请帮手一起做" };
+  if (n === "todowrite") return { icon: "📝", text: "列计划" };
+  return { icon: "✨", text: "忙着准备" };
+}
+
+/** Collapse consecutive tool messages into one group. */
+function groupTools(messages: Message[]): (Message | Message[])[] {
+  const out: (Message | Message[])[] = [];
+  for (const m of messages) {
+    if (m.role !== "tool") out.push(m);
+    else {
+      const last = out[out.length - 1];
+      if (Array.isArray(last)) last.push(m);
+      else out.push([m]);
+    }
+  }
+  return out;
+}
+
+/** One quiet line telling the user she is busy — no commands, paths or tool names. */
+function ActivityRow({ steps, live }: { steps: Message[]; live: boolean }) {
+  const kinds: { icon: string; text: string }[] = [];
+  for (const s of steps) {
+    const f = friendlyTool(s.meta?.name);
+    if (!kinds.some((k) => k.text === f.text)) kinds.push(f);
+  }
+  const current = friendlyTool(steps[steps.length - 1].meta?.name);
+  return (
+    <div className={`activity-row ${live ? "live" : ""}`}>
+      {live ? (
+        <>
+          <span className="activity-dot" />
+          正在{current.text}… <span className="activity-count">第 {steps.length} 步</span>
+        </>
+      ) : (
+        <>
+          {kinds.map((k) => (
+            <span key={k.text} className="activity-kind">{k.icon} {k.text}</span>
+          ))}
+          {steps.length > 1 && <span className="activity-count">共 {steps.length} 步</span>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function AssistantBody({ text, characterId }: { text: string; characterId: string }) {
+  const { text: body, files } = useMemo(() => extractFiles(text), [text]);
+  return (
+    <div className="bubble-msg">
+      {body && <Markdown text={body} />}
+      <FileCards files={files} characterId={characterId} />
     </div>
   );
 }

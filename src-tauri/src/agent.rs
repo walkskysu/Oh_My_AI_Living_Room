@@ -414,16 +414,3 @@ pub fn resolve_binary(provider: Provider, override_path: Option<&str>) -> Option
     }
     None
 }
-
-/// Wrap the user's text depending on whether it is a chat line or a delegated task.
-pub fn compose_prompt(text: &str, mode: &str) -> String {
-    if mode == "task" {
-        format!(
-            "【任务委派】主人把下面这个任务交给你了。请用你的专长和技能认真完成：\n\
-             - 需要产出文件时，保存到当前工作目录的 outputs/ 文件夹里，并在最后告诉主人文件路径；\n\
-             - 完成后用你的角色口吻简要汇报结果。\n\n任务内容：\n{text}"
-        )
-    } else {
-        text.to_string()
-    }
-}
