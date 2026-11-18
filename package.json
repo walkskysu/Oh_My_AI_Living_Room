@@ -1,0 +1,33 @@
+{
+  "name": "oh-my-ai-living-room",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "build:linux": "tauri build --bundles deb,appimage",
+    "build:windows": "tauri build --bundles nsis,msi"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "dompurify": "^3",
+    "marked": "^15",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5",
+    "typescript": "~5.8",
+    "vite": "^7"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

@@ -1,0 +1,388 @@
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { activityLabel, baseActivity, useStore } from "../store";
+import type { AgentConfig, Character, Conversation, Message, Mode } from "../types";
+import { Markdown } from "./Markdown";
+
+type Tab = "chat" | "history" | "profile";
+
+const providerName: Record<string, string> = { claude: "Claude Code", codex: "Codex" };
+
+function fmtTime(iso: string) {
+  const d = new Date(iso);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  return sameDay
+    ? d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+const suggestions: Record<string, { text: string; mode: Mode }[]> = {
+  iris: [
+    { text: "推荐一本适合周末读的小说", mode: "chat" },
+    { text: "帮我把这段话润色得更自然：", mode: "chat" },
+    { text: "读一下 https://example.com 这篇文章，整理成读书笔记", mode: "task" },
+  ],
+};
+
+export function ChatPanel({ character }: { character: Character }) {
+  const { state, dispatch, api } = useStore();
+  const [tab, setTab] = useState<Tab>("chat");
+  const [mode, setMode] = useState<Mode>("chat");
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const convId = state.activeConversation[character.id] ?? null;
+  const messages = (convId && state.messages[convId]) || [];
+  const streaming = convId ? state.streaming[convId] : undefined;
+  const run = state.runs[character.id];
+  const runningHere = !!run && run.conversationId === convId;
+  const activity = baseActivity(state, character.id);
+  const agentCfg: AgentConfig = state.settings.characters[character.id] ?? character.agent;
+
+  const refreshConversations = useCallback(async () => {
+    if (!api) return;
+    setConversations(await api.listConversations(character.id));
+  }, [api, character.id]);
+
+  useEffect(() => {
+    refreshConversations();
+  }, [refreshConversations, state.convVersion]);
+
+  // Load messages of the active conversation.
+  useEffect(() => {
+    if (!api || !convId || state.messages[convId]) return;
+    api.getMessages(convId).then((m) => dispatch({ type: "setMessages", conversationId: convId, messages: m }));
+  }, [api, convId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Stick to bottom.
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages.length, streaming, tab, convId]);
+
+  useEffect(() => {
+    if (tab === "chat") inputRef.current?.focus();
+  }, [tab, convId]);
+
+  const send = async (override?: { text: string; mode: Mode }) => {
+    const body = (override?.text ?? text).trim();
+    const m = override?.mode ?? mode;
+    if (!body || !api || sending || run) return;
+    setSending(true);
+    setError(null);
+    try {
+      const res = await api.sendMessage({ characterId: character.id, conversationId: convId, text: body, mode: m });
+      if (!convId) {
+        dispatch({ type: "setMessages", conversationId: res.conversation.id, messages: [res.userMessage] });
+        dispatch({ type: "setActiveConversation", characterId: character.id, conversationId: res.conversation.id });
+      } else {
+        dispatch({ type: "upsertMessage", message: res.userMessage });
+      }
+      if (!override) setText("");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const openConversation = (id: string | null) => {
+    dispatch({ type: "setActiveConversation", characterId: character.id, conversationId: id });
+    setTab("chat");
+  };
+
+  const saveAgent = async (patch: Partial<AgentConfig>) => {
+    if (!api) return;
+    const next = {
+      ...state.settings,
+      characters: { ...state.settings.characters, [character.id]: { ...agentCfg, ...patch } },
+    };
+    await api.saveSettings(next);
+    dispatch({ type: "settings", settings: next });
+  };
+
+  const close = () => dispatch({ type: "open", characterId: null });
+
+  return (
+    <aside className="panel" style={{ ["--theme" as any]: character.theme.color, ["--soft" as any]: character.theme.soft }}>
+      <header className="panel-head">
+        <img className="avatar lg" src={`/characters/${character.id}/avatar.png`} alt="" />
+        <div className="who">
+          <div className="name">
+            {character.name}
+            {character.nameZh && <small>{character.nameZh}</small>}
+          </div>
+          <div className="title">{character.title}</div>
+          <div className="badges">
+            <span className={`pill s-${activity}`}>{activityLabel[activity]}</span>
+            <span className="pill ghost">{providerName[agentCfg.provider] ?? agentCfg.provider}</span>
+          </div>
+        </div>
+        <div className="head-actions">
+          <button className="icon-btn" title="打开她的工作目录" onClick={() => api?.openWorkspace(character.id)}>📁</button>
+          <button className="icon-btn" title="关闭" onClick={close}>✕</button>
+        </div>
+      </header>
+
+      <nav className="tabs">
+        <button className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}>对话</button>
+        <button className={tab === "history" ? "on" : ""} onClick={() => setTab("history")}>
+          历史记录 <span className="count">{conversations.length}</span>
+        </button>
+        <button className={tab === "profile" ? "on" : ""} onClick={() => setTab("profile")}>关于她</button>
+        {tab === "chat" && (
+          <button className="new-conv" onClick={() => openConversation(null)} disabled={!convId}>＋ 新对话</button>
+        )}
+      </nav>
+
+      {tab === "chat" && (
+        <>
+          <div className="messages" ref={listRef}>
+            {!convId && (
+              <div className="welcome">
+                <div className="msg assistant">
+                  <img className="avatar" src={`/characters/${character.id}/avatar.png`} alt="" />
+                  <div className="bubble-msg">{character.greeting}</div>
+                </div>
+                <div className="suggest">
+                  {(suggestions[character.id] ?? []).map((s) => (
+                    <button
+                      key={s.text}
+                      onClick={() => {
+                        setMode(s.mode);
+                        setText(s.text);
+                        inputRef.current?.focus();
+                      }}
+                    >
+                      {s.mode === "task" ? "📋 " : "💬 "}
+                      {s.text}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {messages.map((m) => (
+              <MessageRow key={m.id} m={m} character={character} />
+            ))}
+            {runningHere && (
+              <div className="msg assistant">
+                <img className="avatar" src={`/characters/${character.id}/avatar.png`} alt="" />
+                <div className="bubble-msg streaming">
+                  {streaming ? <Markdown text={streaming} /> : <span className="typing"><i /><i /><i /></span>}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {run && !runningHere && (
+            <div className="busy-note">
+              {character.name} 正在另一个对话里忙着呢…
+              <button onClick={() => openConversation(run.conversationId)}>去看看</button>
+            </div>
+          )}
+          {error && <div className="error-note" onClick={() => setError(null)}>{error}</div>}
+
+          <div className={`composer mode-${mode}`}>
+            <div className="mode-switch">
+              <button className={mode === "chat" ? "on" : ""} onClick={() => setMode("chat")}>💬 聊天</button>
+              <button className={mode === "task" ? "on" : ""} onClick={() => setMode("task")}>📋 派任务</button>
+              <span className="hint">
+                {mode === "task" ? "她会在自己的工作目录里完成任务，产出放在 outputs/" : "Enter 发送 · Shift+Enter 换行"}
+              </span>
+            </div>
+            <div className="input-row">
+              <textarea
+                ref={inputRef}
+                value={text}
+                rows={2}
+                placeholder={mode === "task" ? `交给 ${character.name} 一个任务…` : `和 ${character.name} 说点什么…`}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
+              />
+              {run ? (
+                <button className="send stop" onClick={() => api?.cancelRun(character.id)}>停止</button>
+              ) : (
+                <button className="send" onClick={() => send()} disabled={!text.trim() || sending}>
+                  {mode === "task" ? "交给她" : "发送"}
+                </button>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {tab === "history" && (
+        <div className="history">
+          {conversations.length === 0 && <div className="empty">还没有对话记录</div>}
+          {conversations.map((c) => (
+            <HistoryRow
+              key={c.id}
+              c={c}
+              active={c.id === convId}
+              running={run?.conversationId === c.id}
+              onOpen={() => openConversation(c.id)}
+              onRename={async (title) => {
+                await api?.renameConversation(c.id, title);
+                refreshConversations();
+              }}
+              onDelete={async () => {
+                try {
+                  await api?.deleteConversation(c.id);
+                  if (c.id === convId) openConversation(null);
+                  setTab("history");
+                  refreshConversations();
+                } catch (e) {
+                  setError(String(e));
+                }
+              }}
+            />
+          ))}
+        </div>
+      )}
+
+      {tab === "profile" && (
+        <div className="profile">
+          <p className="bio">{character.bio}</p>
+          <h4>擅长</h4>
+          <div className="chips">
+            {character.specialties.map((s) => <span key={s} className="chip">{s}</span>)}
+          </div>
+          <h4>技能 Skills</h4>
+          <ul className="skills">
+            {character.skills.map((s) => (
+              <li key={s.name}><code>{s.name}</code><span>{s.description}</span></li>
+            ))}
+            {character.skills.length === 0 && <li className="empty">暂无</li>}
+          </ul>
+          <h4>Agent 设置</h4>
+          <div className="form">
+            <label>
+              Harness
+              <select value={agentCfg.provider} onChange={(e) => saveAgent({ provider: e.target.value })}>
+                <option value="claude">Claude Code</option>
+                <option value="codex">Codex</option>
+              </select>
+            </label>
+            <label>
+              模型
+              <input
+                defaultValue={agentCfg.model ?? ""}
+                placeholder="默认（例如 sonnet / opus / gpt-5）"
+                onBlur={(e) => saveAgent({ model: e.target.value.trim() || null })}
+              />
+            </label>
+            <label>
+              权限
+              <select value={agentCfg.permissionMode} onChange={(e) => saveAgent({ permissionMode: e.target.value })}>
+                <option value="default">只读为主（default）</option>
+                <option value="acceptEdits">允许编辑工作目录文件（acceptEdits）</option>
+                <option value="bypassPermissions">完全放开（bypassPermissions，慎用）</option>
+              </select>
+            </label>
+          </div>
+          <details className="persona">
+            <summary>人设提示词</summary>
+            <pre>{character.persona}</pre>
+          </details>
+        </div>
+      )}
+    </aside>
+  );
+}
+
+function MessageRow({ m, character }: { m: Message; character: Character }) {
+  const [open, setOpen] = useState(false);
+  const { state } = useStore();
+  // normalise separators so Windows paths (C:\\...\\workspaces\\iris\\x) shorten too
+  const norm = (p: string) => p.replace(/\\/g, "/");
+  const ws = norm(`${state.dataDir}/workspaces/${character.id}/`);
+  if (m.role === "user") {
+    return (
+      <div className="msg user">
+        <div className="bubble-msg">
+          {m.meta?.mode === "task" && <span className="task-tag">📋 任务</span>}
+          {m.content}
+        </div>
+      </div>
+    );
+  }
+  if (m.role === "assistant") {
+    return (
+      <div className="msg assistant">
+        <img className="avatar" src={`/characters/${character.id}/avatar.png`} alt="" />
+        <div className="bubble-msg"><Markdown text={m.content} /></div>
+      </div>
+    );
+  }
+  if (m.role === "tool") {
+    const ok = m.meta?.ok;
+    return (
+      <div className={`tool-row ${ok === false ? "bad" : ""}`}>
+        <button onClick={() => setOpen(!open)}>
+          <span className="tool-icon">{ok === undefined ? "⏳" : ok ? "🔧" : "⚠️"}</span>
+          <b>{m.meta?.name}</b>
+          <span className="tool-sum" title={m.content}>{norm(m.content).split(ws).join("")}</span>
+        </button>
+        {open && m.meta?.output && <pre>{m.meta.output}</pre>}
+      </div>
+    );
+  }
+  if (m.role === "error") {
+    return <div className="sys-row error">⚠️ {m.content}</div>;
+  }
+  const secs = m.meta?.durationMs ? `${(m.meta.durationMs / 1000).toFixed(1)}s` : "";
+  const cost = m.meta?.costUsd ? `$${Number(m.meta.costUsd).toFixed(3)}` : "";
+  return <div className="sys-row">✓ 完成 {[secs, cost].filter(Boolean).join(" · ")}</div>;
+}
+
+function HistoryRow(props: {
+  c: Conversation;
+  active: boolean;
+  running: boolean;
+  onOpen: () => void;
+  onRename: (t: string) => void;
+  onDelete: () => void;
+}) {
+  const { c } = props;
+  const [editing, setEditing] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  return (
+    <div className={`hist ${props.active ? "active" : ""}`}>
+      {editing ? (
+        <input
+          autoFocus
+          defaultValue={c.title}
+          onBlur={(e) => {
+            setEditing(false);
+            if (e.target.value.trim() && e.target.value !== c.title) props.onRename(e.target.value);
+          }}
+          onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+        />
+      ) : (
+        <button className="hist-main" onClick={props.onOpen}>
+          <span className="hist-title">{props.running && "⏳ "}{c.title}</span>
+          <span className="hist-meta">
+            {fmtTime(c.updatedAt)} · {c.messageCount} 条 · {providerName[c.provider] ?? c.provider}
+          </span>
+        </button>
+      )}
+      <div className="hist-actions">
+        <button title="重命名" onClick={() => setEditing(true)}>✎</button>
+        {confirm ? (
+          <button className="danger" onClick={props.onDelete} onBlur={() => setConfirm(false)} autoFocus>确认删除</button>
+        ) : (
+          <button title="删除" onClick={() => setConfirm(true)}>🗑</button>
+        )}
+      </div>
+    </div>
+  );
+}
