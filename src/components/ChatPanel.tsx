@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { activityLabel, baseActivity, useStore } from "../store";
+import { isTauri } from "../api";
+import { baseActivity, labelFor, useStore } from "../store";
 import type { AgentConfig, Character, Conversation, Message } from "../types";
 import { Markdown } from "./Markdown";
-import { extractFiles, FileCards } from "./FileCards";
+import { extractFiles, FileCards, ImageThumb } from "./FileCards";
 
 type Tab = "chat" | "history" | "profile";
 
@@ -23,7 +24,20 @@ const suggestions: Record<string, string[]> = {
     "帮我把这段话润色得更自然：",
     "读一下 https://example.com 这篇文章，整理成读书笔记",
   ],
+  poppy: [
+    "画一只在窗台上晒太阳的橘猫，水彩风格",
+    "（把图片拖进来）帮我反推这张图的提示词",
+    "（把图片拖进来）把背景改成樱花盛开的公园",
+  ],
 };
+
+/** Pasted clipboard images have generic names; give them a timestamped one. */
+function pasteName(f: File) {
+  const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
+  const t = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `paste-${t.getFullYear()}${p(t.getMonth() + 1)}${p(t.getDate())}-${p(t.getHours())}${p(t.getMinutes())}${p(t.getSeconds())}.${ext}`;
+}
 
 export function ChatPanel({ character }: { character: Character }) {
   const { state, dispatch, api } = useStore();
@@ -32,6 +46,9 @@ export function ChatPanel({ character }: { character: Character }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  /** Files the user dropped/pasted, already copied into her workspace (`inputs/...`). */
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -68,9 +85,58 @@ export function ChatPanel({ character }: { character: Character }) {
     if (tab === "chat") inputRef.current?.focus();
   }, [tab, convId]);
 
+  const attach = useCallback(
+    async (job: () => Promise<string>) => {
+      try {
+        const rel = await job();
+        setAttachments((a) => (a.includes(rel) ? a : [...a, rel]));
+        inputRef.current?.focus();
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [],
+  );
+
+  // Files dropped on the window while her panel is open (Tauri gives real paths).
+  useEffect(() => {
+    if (!isTauri || !api) return;
+    let un: (() => void) | undefined;
+    let alive = true;
+    import("@tauri-apps/api/webview").then(({ getCurrentWebview }) =>
+      getCurrentWebview()
+        .onDragDropEvent((e) => {
+          const p = e.payload;
+          if (p.type === "enter" || p.type === "over") setDragOver(true);
+          else if (p.type === "leave") setDragOver(false);
+          else if (p.type === "drop") {
+            setDragOver(false);
+            setTab("chat");
+            for (const path of p.paths) attach(() => api.importFile(character.id, path));
+          }
+        })
+        .then((f) => (alive ? (un = f) : f())),
+    );
+    return () => {
+      alive = false;
+      un?.();
+    };
+  }, [api, character.id, attach]);
+
+  const uploadFiles = (files: File[]) => {
+    if (!api) return;
+    for (const f of files) {
+      const name = !f.name || /^image\.\w+$/.test(f.name) ? pasteName(f) : f.name;
+      attach(async () => api.saveUpload(character.id, name, new Uint8Array(await f.arrayBuffer())));
+    }
+  };
+
   const send = async () => {
-    const body = text.trim();
-    if (!body || !api || sending || run) return;
+    let body = text.trim();
+    if ((!body && attachments.length === 0) || !api || sending || run) return;
+    if (attachments.length > 0) {
+      body = `${body || "请看附件。"}\n\n附件：${attachments.map((a) => `\`${a}\``).join("、")}`;
+    }
     setSending(true);
     setError(null);
     try {
@@ -82,6 +148,7 @@ export function ChatPanel({ character }: { character: Character }) {
         dispatch({ type: "upsertMessage", message: res.userMessage });
       }
       setText("");
+      setAttachments([]);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -117,7 +184,7 @@ export function ChatPanel({ character }: { character: Character }) {
           </div>
           <div className="title">{character.title}</div>
           <div className="badges">
-            <span className={`pill s-${activity}`}>{activityLabel[activity]}</span>
+            <span className={`pill s-${activity}`}>{labelFor(character, activity)}</span>
             <span className="pill ghost">{providerName[agentCfg.provider] ?? agentCfg.provider}</span>
           </div>
         </div>
@@ -189,15 +256,46 @@ export function ChatPanel({ character }: { character: Character }) {
 
           <div className="composer">
             <div className="composer-hint">
-              需要动手时她会自己开始工作 · Enter 发送，Shift+Enter 换行
+              Enter 发送 · Shift+Enter 换行 · 可拖入或粘贴图片
             </div>
-            <div className="input-row">
+            {attachments.length > 0 && (
+              <div className="attachments">
+                {attachments.map((a) => (
+                  <span key={a} className="attachment" title={a}>
+                    <ImageThumb characterId={character.id} path={a} />
+                    <span className="attachment-name">{a.replace(/^inputs\//, "")}</span>
+                    <button className="icon-btn" title="移除" onClick={() => setAttachments((x) => x.filter((y) => y !== a))}>✕</button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div
+              className={`input-row ${dragOver ? "drag-over" : ""}`}
+              onDragOver={(e) => {
+                if (isTauri) return;
+                e.preventDefault();
+                setDragOver(true);
+              }}
+              onDragLeave={() => !isTauri && setDragOver(false)}
+              onDrop={(e) => {
+                if (isTauri) return;
+                e.preventDefault();
+                setDragOver(false);
+                uploadFiles(Array.from(e.dataTransfer.files));
+              }}
+            >
               <textarea
                 ref={inputRef}
                 value={text}
                 rows={2}
                 placeholder={`和 ${character.name} 说点什么，或交给她一件事…`}
                 onChange={(e) => setText(e.target.value)}
+                onPaste={(e) => {
+                  const files = Array.from(e.clipboardData.files);
+                  if (files.length === 0) return;
+                  e.preventDefault();
+                  uploadFiles(files);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                     e.preventDefault();
@@ -208,7 +306,7 @@ export function ChatPanel({ character }: { character: Character }) {
               {run ? (
                 <button className="send stop" onClick={() => api?.cancelRun(character.id)}>停止</button>
               ) : (
-                <button className="send" onClick={() => send()} disabled={!text.trim() || sending}>
+                <button className="send" onClick={() => send()} disabled={(!text.trim() && attachments.length === 0) || sending}>
                   发送
                 </button>
               )}
@@ -302,7 +400,7 @@ function MessageRow({ m, character }: { m: Message; character: Character }) {
       <div className="msg user">
         <div className="bubble-msg">
           {m.meta?.mode === "task" && <span className="task-tag">📋 任务</span>}
-          {m.content}
+          <UserBody text={m.content} characterId={character.id} />
         </div>
       </div>
     );
@@ -418,6 +516,16 @@ function ActivityRow({ steps, live }: { steps: Message[]; live: boolean }) {
         </>
       )}
     </div>
+  );
+}
+
+function UserBody({ text, characterId }: { text: string; characterId: string }) {
+  const { files } = useMemo(() => extractFiles(text), [text]);
+  return (
+    <>
+      {text}
+      <FileCards files={files} characterId={characterId} />
+    </>
   );
 }
 

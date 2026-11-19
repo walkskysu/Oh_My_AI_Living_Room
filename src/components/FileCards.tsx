@@ -8,7 +8,7 @@ export interface FileRef {
 
 const CITATION = /:{1,2}codex-file-citation\{([^}]*)\}/g;
 // `outputs/foo.md`, `C:\...\workspaces\iris\outputs\foo.pptx`, `/home/.../outputs/foo.md`
-const CODE_PATH = /`([^`\n]*?(?:^|[\\/]|\b)outputs[\\/][^`\n]*?\.[A-Za-z0-9]{1,8})`/g;
+const CODE_PATH = /`([^`\n]*?(?:^|[\\/]|\b)(?:outputs|inputs)[\\/][^`\n]*?\.[A-Za-z0-9]{1,8})`/g;
 
 function baseName(p: string) {
   return p.split(/[\\/]/).filter(Boolean).pop() ?? p;
@@ -52,6 +52,44 @@ function fileIcon(name: string) {
   return ICONS.find(([re]) => re.test(ext))?.[1] ?? "📎";
 }
 
+const PREVIEWABLE = /\.(png|jpe?g|webp|gif|bmp)$/i;
+
+/** Small square preview of a workspace image (empty box if not an image). */
+export function ImageThumb({ characterId, path }: { characterId: string; path: string }) {
+  const { api } = useStore();
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    if (!PREVIEWABLE.test(path)) return;
+    let alive = true;
+    api?.readImage(characterId, path).then((u) => alive && setSrc(u)).catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [api, characterId, path]);
+  return src ? <img className="thumb" src={src} alt="" /> : <span className="thumb">📎</span>;
+}
+
+/** Thumbnail of an image she produced (loaded through the backend, so only workspace files). */
+function ImageCard({ file, characterId, onOpen }: { file: FileRef; characterId: string; onOpen: () => void }) {
+  const { api } = useStore();
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api?.readImage(characterId, file.path).then((u) => alive && setSrc(u)).catch(() => alive && setFailed(true));
+    return () => {
+      alive = false;
+    };
+  }, [api, characterId, file.path]);
+  if (failed) return null;
+  return (
+    <button className="image-card" title={`${file.name} · 双击用看图软件打开`} onDoubleClick={onOpen} onKeyDown={(e) => e.key === "Enter" && onOpen()}>
+      {src ? <img src={src} alt={file.name} /> : <span className="image-loading">🖼️</span>}
+      <span className="image-name">{file.name}</span>
+    </button>
+  );
+}
+
 export function FileCards({ files, characterId }: { files: FileRef[]; characterId: string }) {
   const { api } = useStore();
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +121,7 @@ export function FileCards({ files, characterId }: { files: FileRef[]; characterI
   return (
     <div className="file-cards">
       {shown.map((f) => {
+        if (PREVIEWABLE.test(f.name)) return <ImageCard key={f.path} file={f} characterId={characterId} onOpen={() => open(f)} />;
         const dot = f.name.lastIndexOf(".");
         return (
           <button

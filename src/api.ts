@@ -1,6 +1,7 @@
 import type {
   AgentAvailability,
   Bootstrap,
+  ComfyStatus,
   Conversation,
   EventPayload,
   Message,
@@ -24,6 +25,13 @@ export interface Api {
   openFile(characterId: string, path: string): Promise<void>;
   existingFiles(characterId: string, paths: string[]): Promise<boolean[]>;
   cancelRun(characterId: string): Promise<void>;
+  /** Image in her workspace as a data: URL (for previews). */
+  readImage(characterId: string, path: string): Promise<string>;
+  /** Copy a dropped file into her workspace; returns e.g. `inputs/foo.png`. */
+  importFile(characterId: string, path: string): Promise<string>;
+  /** Save pasted bytes into her workspace; returns e.g. `inputs/paste.png`. */
+  saveUpload(characterId: string, name: string, data: Uint8Array): Promise<string>;
+  checkComfyui(url?: string | null): Promise<ComfyStatus>;
   sendMessage(args: {
     characterId: string;
     conversationId: string | null;
@@ -49,6 +57,10 @@ async function tauriApi(): Promise<Api> {
     openFile: (characterId, path) => invoke("open_file", { characterId, path }),
     existingFiles: (characterId, paths) => invoke("existing_files", { characterId, paths }),
     cancelRun: (characterId) => invoke("cancel_run", { characterId }),
+    readImage: (characterId, path) => invoke("read_image", { characterId, path }),
+    importFile: (characterId, path) => invoke("import_file", { characterId, path }),
+    saveUpload: (characterId, name, data) => invoke("save_upload", { characterId, name, data: Array.from(data) }),
+    checkComfyui: (url) => invoke("check_comfyui", { url: url ?? null }),
     sendMessage: (args) => invoke("send_message", args),
     onAgentEvent: (cb) => listen<EventPayload>("agent-event", (e) => cb(e.payload)),
     onAgentStatus: (cb) => listen<StatusPayload>("agent-status", (e) => cb(e.payload)),
@@ -58,7 +70,11 @@ async function tauriApi(): Promise<Api> {
 /** In-browser mock so the UI can be previewed with plain `npm run dev`. */
 async function mockApi(): Promise<Api> {
   const iris = (await import("../characters/iris/character.json")).default as any;
-  const characters = [{ ...iris, skills: [{ name: "reading-notes", description: "读书笔记" }, { name: "writing-polish", description: "润色" }] }];
+  const poppy = (await import("../characters/poppy/character.json")).default as any;
+  const characters = [
+    { ...iris, skills: [{ name: "reading-notes", description: "读书笔记" }, { name: "writing-polish", description: "润色" }] },
+    { ...poppy, skills: [{ name: "painting", description: "画图、改图、拆图层" }, { name: "image-prompt-reverse", description: "反推提示词" }] },
+  ];
   const convs: Conversation[] = [];
   const msgs: Record<string, Message[]> = {};
   let nextId = 1;
@@ -91,6 +107,10 @@ async function mockApi(): Promise<Api> {
     openFile: async (_c, path) => alert(`(浏览器预览) 打开 ${path}`),
     existingFiles: async (_c, paths) => paths.map(() => true),
     cancelRun: async () => {},
+    readImage: async () => "/characters/poppy/poses/reading.png",
+    importFile: async (_c, path) => `inputs/${path.split(/[\\/]/).pop()}`,
+    saveUpload: async (_c, name) => `inputs/${name}`,
+    checkComfyui: async (url) => ({ url: url || "http://127.0.0.1:8188", ok: false, detail: "浏览器预览模式无法检测" }),
     sendMessage: async ({ characterId, conversationId, text }) => {
       let conv = convs.find((c) => c.id === conversationId);
       if (!conv) {

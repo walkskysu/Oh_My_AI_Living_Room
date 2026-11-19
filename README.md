@@ -2,7 +2,7 @@
 
 一个温馨的「AI 客厅」桌面程序：客厅里住着几位角色，每位角色背后都是一个 CLI coding agent（Claude Code / Codex），有自己的人设、专长和 skills。点角色就能聊天或交代任务；她们在无聊、工作中、完成时会有不同的动画。
 
-第一版（v0.1）：Tauri 2 + React，已实现角色 **Iris（艾莉丝）**，支持 Claude Code 与 Codex 两种 harness，所有对话存进 SQLite。
+第一版（v0.1）：Tauri 2 + React，已实现角色 **Iris（艾莉丝）**（阅读与写作）和 **Poppy（波比）**（画图、改图、反推提示词、拆图层），支持 Claude Code 与 Codex 两种 harness，所有对话存进 SQLite。
 
 ## 运行
 
@@ -51,7 +51,21 @@ Windows 下数据（对话库、设置、角色工作目录）在 `%APPDATA%\ohm
 | 对话框 | 点角色（像素级命中）打开：单一输入框（不分聊天/任务，是否「工作」由后端按工具调用和耗时自动判断）、流式回复、工具调用折叠行、停止按钮、新对话、历史记录（重命名/删除）、「关于她」（人设、专长、skills、harness/模型/权限设置） |
 | Agent | 每个角色在自己的工作目录里运行 harness：`~/.local/share/com.ohmyai.livingroom/workspaces/<id>/`，产出放 `outputs/` |
 | 存储 | `~/.local/share/com.ohmyai.livingroom/living_room.db`：`conversations`（含 harness session id，用于续聊）+ `messages`（user / assistant / tool / error / system） |
+| 附件 | 把文件拖到窗口上或在输入框粘贴截图，会复制到该角色工作目录的 `inputs/`，消息里以 `` `inputs/xxx.png` `` 引用；对话中提到的 `inputs/`、`outputs/` 图片直接显示缩略图（双击用系统看图软件打开） |
 | 通知 | 对话框关闭时任务完成/出错会弹出 toast，点 toast 直接打开那段对话 |
+
+## Poppy 的画图能力
+
+| | Claude Code | Codex |
+|---|---|---|
+| 画图 / 改图 | `painting` skill → `comfy.py`（纯标准库）调用 ComfyUI：Qwen-Image 2.1 文生图 / 编辑 | Codex 内建图片生成 |
+| 反推提示词 | `image-prompt-reverse` skill（[LunarXuan/image-prompt-reverse](https://github.com/LunarXuan/image-prompt-reverse)，GPL-3.0，原样收录）；可选 `comfy.py describe` 用 Qwen3-VL 先描述一遍作参考 | 同一 skill，直接看图 |
+| 拆图层 | `comfy.py layers`（See-through，输出分层 PNG + PSD） | 不支持 |
+
+- ComfyUI 地址在「客厅设置 → ComfyUI」里配置（默认 `http://127.0.0.1:8188`，带连接检测），以环境变量 `COMFYUI_URL` 传给 agent；`LIVING_ROOM_HARNESS` 告诉 skill 当前是 `claude` 还是 `codex`。
+- 工作流以 API 格式放在 `characters/poppy/skills/painting/workflows/`（由 ComfyUI 中保存的 `image_qwen_image_2_1_t2i` / `image_qwen_image_2_1_image_edit` / `QWenVL_desc_image_prompt` / `seethrough-basic` 转换而来），ComfyUI 端需装好对应模型和节点。
+- `character.json` 的 `allowedTools`（如 `Bash(python3 .claude/skills/painting/comfy.py:*)`）以 `--allowedTools` 传给 Claude Code：无头模式没法弹确认框，skill 要跑的脚本必须预先放行（工作目录未被信任时 `.claude/settings.json` 里的 allow 会被忽略，所以不用它）。Iris 的 `to_pdf.py` 也同样放行。
+- `character.json` 的 `harnessNotes.{claude,codex}` 会分别追加到 Claude Code 的系统提示（persona.md）和 Codex 的 `AGENTS.md`，用来告诉角色在当前 harness 下该用哪种画图工具。
 
 ## Agent harness 适配（`src-tauri/src/agent.rs`）
 
@@ -68,7 +82,7 @@ Windows 下数据（对话库、设置、角色工作目录）在 `%APPDATA%\ohm
 
 ## 新增角色
 
-1. `characters/<id>/character.json`（参考 `characters/iris/character.json`）：人设 `persona`、`specialties`、`greeting`、`agent`（provider/model/permissionMode）、`scene`（舞台坐标 x/y/width）、`sprites`、气泡台词 `lines`。
+1. `characters/<id>/character.json`（参考 `characters/iris/character.json`）：人设 `persona`、按 harness 区分的补充说明 `harnessNotes`（可选）、`specialties`、`greeting`、`agent`（provider/model/permissionMode）、`scene`（舞台坐标 x/y/width）、`sprites`、气泡台词 `lines`。
 2. `characters/<id>/skills/<skill>/SKILL.md`：角色专属 Claude Code skills。
 3. 美术放到 `public/characters/<id>/`：`avatar.png`、`poses/<pose>.png`（静态，用于命中检测和加载前占位）、`anim/<pose>.json + .webp`（序列帧）。没有序列帧时只给 `image`，会退化为 CSS 呼吸/摇摆动画。
 
@@ -79,3 +93,5 @@ Windows 下数据（对话库、设置、角色工作目录）在 `%APPDATA%\ohm
 3. **修图层**：`art/tools/build_psd.py` —— 用原画颜色重新上色每层可见像素（修正缺失的瞳孔等），把没被覆盖的像素（如发带）并入邻近图层，输出 PSD。
 4. **骨骼**：Rigby2D `autorig`（覆盖参数见 `art/rig/autorig_roles.json`，关 IK，手臂/道具挂躯干）→ `run_script` 跑 `art/rig/anims.py` 生成每个姿势的循环动画。工程文件在 `art/rig/*.rigby`。
 5. **导出**：`export_sprite_sheet`（12fps，scale 0.6）→ `art/tools/pack_sheets.py` 按骨架原点对齐到统一画框、缩放 0.75、打包成方形 WebP 图集 + JSON，并生成首帧静态图。
+
+Poppy 的素材在 `art/poppy/`：先用 `birefnet_remove_background` 去掉原图的暗色光晕背景并铺白底，其余步骤相同（`make_edit.py`、`run_edits.sh`、`run_st.sh`，工程在 `/mnt/e/rig_projects/poppy/`）。她坐在自己的高脚凳上：See-through 会把凳子和调色盘一起归进 objects 层，所以 `build_psd.py` 时加上 `SPLIT=prop:stool:570`，把画布 y≥570 的部分拆成单独的 `stool` 层（放在最底），autorig 时给它 `"stool": "none"`，让它挂在 root 上不跟着身体动；动画里也不移动 hip。

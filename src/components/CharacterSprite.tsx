@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { activityLabel, baseActivity, useStore } from "../store";
+import { baseActivity, labelFor, useStore } from "../store";
 import type { Activity, Character } from "../types";
 import { preloadSheet, SpritePlayer } from "./SpritePlayer";
 
@@ -172,7 +172,7 @@ export function CharacterSprite({ character }: { character: Character }) {
       <div className="nametag">
         <b>{character.name}</b>
         <span className={`status-dot s-${activity}`} />
-        <span>{activityLabel[activity]}</span>
+        <span>{labelFor(character, activity)}</span>
       </div>
     </div>
   );

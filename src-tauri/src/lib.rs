@@ -21,6 +21,9 @@ pub struct Settings {
     pub claude_path: Option<String>,
     #[serde(default)]
     pub codex_path: Option<String>,
+    /// ComfyUI server the painting skills talk to (Claude Code harness).
+    #[serde(default)]
+    pub comfyui_url: Option<String>,
     /// Per-character overrides of the agent config.
     #[serde(default)]
     pub characters: HashMap<String, AgentConfig>,
@@ -63,6 +66,19 @@ impl AppState {
     }
     fn settings_path(&self) -> PathBuf {
         self.data_dir.join("settings.json")
+    }
+}
+
+const DEFAULT_COMFYUI_URL: &str = "http://127.0.0.1:8188";
+
+impl Settings {
+    fn comfyui_url(&self) -> String {
+        self.comfyui_url
+            .as_deref()
+            .map(|u| u.trim().trim_end_matches('/'))
+            .filter(|u| !u.is_empty())
+            .unwrap_or(DEFAULT_COMFYUI_URL)
+            .to_string()
     }
 }
 
@@ -263,6 +279,155 @@ fn open_file(app: AppHandle, state: State<'_, AppState>, character_id: String, p
     app.opener().open_path(p.to_string_lossy(), None::<&str>).map_err(err)
 }
 
+const IMAGE_EXTS: &[(&str, &str)] = &[
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("webp", "image/webp"),
+    ("gif", "image/gif"),
+    ("bmp", "image/bmp"),
+];
+
+fn image_mime(p: &std::path::Path) -> Option<&'static str> {
+    let ext = p.extension()?.to_str()?.to_ascii_lowercase();
+    IMAGE_EXTS.iter().find(|(e, _)| *e == ext).map(|(_, m)| *m)
+}
+
+fn base64(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for c in data.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= c.len() {
+                out.push(T[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// An image from her workspace as a data: URL, for inline previews in chat.
+#[tauri::command]
+fn read_image(state: State<'_, AppState>, character_id: String, path: String) -> Result<String, String> {
+    let p = workspace_file(&state, &character_id, &path)?;
+    let mime = image_mime(&p).ok_or("不是图片文件")?;
+    let meta = std::fs::metadata(&p).map_err(err)?;
+    if meta.len() > 25 * 1024 * 1024 {
+        return Err("图片太大，无法预览".into());
+    }
+    let data = std::fs::read(&p).map_err(err)?;
+    Ok(format!("data:{mime};base64,{}", base64(&data)))
+}
+
+/// A file name that is safe to create inside `inputs/`, made unique if it already exists.
+fn unique_input_path(ws: &std::path::Path, name: &str) -> PathBuf {
+    let clean: String = name
+        .chars()
+        .map(|c| if c.is_control() || "\\/:*?\"<>|".contains(c) { '_' } else { c })
+        .collect();
+    let clean = clean.trim().trim_start_matches('.');
+    let clean = if clean.is_empty() { "image.png" } else { clean };
+    let dir = ws.join("inputs");
+    let p = dir.join(clean);
+    if !p.exists() {
+        return p;
+    }
+    let (stem, ext) = match clean.rsplit_once('.') {
+        Some((s, e)) => (s.to_string(), format!(".{e}")),
+        None => (clean.to_string(), String::new()),
+    };
+    (2..)
+        .map(|i| dir.join(format!("{stem}-{i}{ext}")))
+        .find(|p| !p.exists())
+        .unwrap()
+}
+
+/// Copy a file the user dropped on the chat into her workspace (`inputs/`), so
+/// the agent can read it. Returns the workspace-relative path.
+#[tauri::command]
+fn import_file(state: State<'_, AppState>, character_id: String, path: String) -> Result<String, String> {
+    state.character(&character_id)?;
+    let src = PathBuf::from(&path);
+    if !src.is_file() {
+        return Err("只能添加文件（不支持文件夹）".into());
+    }
+    let ws = state.workspace(&character_id);
+    std::fs::create_dir_all(ws.join("inputs")).map_err(err)?;
+    let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let dst = unique_input_path(&ws, &name);
+    std::fs::copy(&src, &dst).map_err(err)?;
+    Ok(format!("inputs/{}", dst.file_name().unwrap().to_string_lossy()))
+}
+
+/// Save pasted bytes (e.g. a screenshot from the clipboard) into `inputs/`.
+#[tauri::command]
+fn save_upload(state: State<'_, AppState>, character_id: String, name: String, data: Vec<u8>) -> Result<String, String> {
+    state.character(&character_id)?;
+    let ws = state.workspace(&character_id);
+    std::fs::create_dir_all(ws.join("inputs")).map_err(err)?;
+    let dst = unique_input_path(&ws, &name);
+    std::fs::write(&dst, data).map_err(err)?;
+    Ok(format!("inputs/{}", dst.file_name().unwrap().to_string_lossy()))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ComfyStatus {
+    url: String,
+    ok: bool,
+    detail: String,
+}
+
+/// Probe ComfyUI's `/system_stats` (plain HTTP/1.0, so no HTTP client dependency).
+#[tauri::command]
+async fn check_comfyui(state: State<'_, AppState>, url: Option<String>) -> Result<ComfyStatus, String> {
+    let url = match url.map(|u| u.trim().trim_end_matches('/').to_string()).filter(|u| !u.is_empty()) {
+        Some(u) => u,
+        None => state.settings.lock().unwrap().comfyui_url(),
+    };
+    let probe = url.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        use std::io::{Read, Write};
+        use std::net::ToSocketAddrs;
+        let rest = probe
+            .strip_prefix("http://")
+            .ok_or("目前只支持 http:// 地址")?;
+        let (hostport, base) = match rest.split_once('/') {
+            Some((h, b)) => (h, format!("/{b}")),
+            None => (rest, String::new()),
+        };
+        let addr_str = if hostport.contains(':') { hostport.to_string() } else { format!("{hostport}:80") };
+        let addr = addr_str
+            .to_socket_addrs()
+            .map_err(|e| format!("地址无效：{e}"))?
+            .next()
+            .ok_or("地址无效")?;
+        let t = std::time::Duration::from_secs(4);
+        let mut s = std::net::TcpStream::connect_timeout(&addr, t).map_err(|e| format!("连不上：{e}"))?;
+        s.set_read_timeout(Some(t)).ok();
+        write!(s, "GET {base}/system_stats HTTP/1.0\r\nHost: {hostport}\r\n\r\n").map_err(err)?;
+        let mut body = String::new();
+        s.read_to_string(&mut body).map_err(err)?;
+        let (head, json) = body.split_once("\r\n\r\n").unwrap_or((&body, ""));
+        if !head.starts_with("HTTP/1.1 200") && !head.starts_with("HTTP/1.0 200") {
+            return Err(head.lines().next().unwrap_or("无响应").to_string());
+        }
+        let v: serde_json::Value = serde_json::from_str(json).map_err(|_| "不像是 ComfyUI".to_string())?;
+        let ver = v["system"]["comfyui_version"].as_str().unwrap_or("?");
+        let gpu = v["devices"][0]["name"].as_str().unwrap_or("");
+        Ok(format!("ComfyUI {ver} {gpu}").trim().to_string())
+    })
+    .await
+    .map_err(err)?;
+    Ok(match res {
+        Ok(detail) => ComfyStatus { url, ok: true, detail },
+        Err(detail) => ComfyStatus { url, ok: false, detail },
+    })
+}
+
 #[tauri::command]
 fn cancel_run(state: State<'_, AppState>, character_id: String) -> Result<(), String> {
     if let Some(r) = state.runs.lock().unwrap().get_mut(&character_id) {
@@ -387,6 +552,8 @@ async fn send_message(
         model: cfg.model.as_deref(),
         permission_mode: &cfg.permission_mode,
         resume: resume.as_deref(),
+        allowed_tools: characters::allowed_tools(&character, &ws),
+        env: vec![("COMFYUI_URL".into(), settings.comfyui_url())],
     });
     cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -715,6 +882,10 @@ pub fn run() {
             open_workspace,
             open_file,
             existing_files,
+            read_image,
+            import_file,
+            save_upload,
+            check_comfyui,
             cancel_run,
             send_message,
         ])
@@ -725,6 +896,36 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::agent::*;
+
+    #[test]
+    fn claude_command_carries_allowed_tools_and_env() {
+        let ws = std::path::Path::new("/tmp/ws");
+        let cmd = build_command(&RunSpec {
+            provider: Provider::Claude,
+            binary: "claude".into(),
+            workspace: ws,
+            persona_file: &ws.join("persona.md"),
+            model: None,
+            permission_mode: "acceptEdits",
+            resume: None,
+            allowed_tools: vec!["Bash(python3 a.py:*)".into(), "Bash(py a.py:*)".into()],
+            env: vec![("COMFYUI_URL".into(), "http://h:1".into())],
+        });
+        let std = cmd.as_std();
+        let args: Vec<_> = std.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let i = args.iter().position(|a| a == "--allowedTools").expect("flag");
+        assert_eq!(args[i + 1], "Bash(python3 a.py:*),Bash(py a.py:*)");
+        let envs: Vec<_> = std.get_envs().map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()))).collect();
+        assert!(envs.contains(&("COMFYUI_URL".into(), Some("http://h:1".into()))));
+        assert!(envs.contains(&("LIVING_ROOM_HARNESS".into(), Some("claude".into()))));
+    }
+
+    #[test]
+    fn base64_matches_rfc4648() {
+        for (i, o) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")] {
+            assert_eq!(super::base64(i.as_bytes()), o);
+        }
+    }
 
     #[test]
     fn parses_claude_stream() {

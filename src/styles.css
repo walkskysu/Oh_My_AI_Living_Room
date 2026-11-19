@@ -355,4 +355,23 @@ input, select, textarea { font: inherit; color: inherit; }
 .file-meta { display: flex; flex-direction: column; min-width: 0; }
 .file-title { font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-ext { font-size: 11.5px; color: var(--ink-soft); }
+.image-card {
+  display: flex; flex-direction: column; gap: 4px; padding: 6px; max-width: 100%; cursor: zoom-in;
+  border: 1px solid var(--line); background: color-mix(in srgb, var(--theme) 9%, white); border-radius: 12px;
+  transition: transform .12s, box-shadow .12s;
+}
+.image-card:hover { transform: translateY(-1px); box-shadow: 0 3px 10px rgba(80, 50, 110, .12); }
+.image-card:focus-visible { outline: 2px solid var(--theme); }
+.image-card img { display: block; max-width: 260px; max-height: 260px; width: auto; height: auto; border-radius: 8px; background: repeating-conic-gradient(#eee 0 25%, #fff 0 50%) 0 0 / 16px 16px; }
+.image-loading { display: grid; place-items: center; width: 160px; height: 120px; font-size: 32px; opacity: .5; }
+.image-name { font-size: 11.5px; color: var(--ink-soft); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 .file-error { width: 100%; font-size: 12px; color: #a33; }
+
+/* attachments (dropped / pasted files) */
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.attachment { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 3px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--theme) 8%, white); max-width: 220px; }
+.attachment .thumb { width: 34px; height: 34px; object-fit: cover; border-radius: 7px; display: grid; place-items: center; flex: none; background: #fff; }
+.attachment-name { font-size: 12px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment .icon-btn { width: 22px; height: 22px; font-size: 11px; }
+.input-row.drag-over { outline: 2px dashed var(--theme); outline-offset: 3px; border-radius: 12px; }
+.msg.user .file-cards { margin-top: 6px; }

@@ -35,12 +35,15 @@ export interface Character {
   };
   sprites: Partial<Record<"reading" | "bored" | "working" | "done", SpriteDef>>;
   lines?: Partial<Record<Activity, string[]>>;
+  /** Overrides of the status pill text, e.g. { reading: "画画中" }. */
+  activityLabels?: Partial<Record<Activity, string>>;
   skills: { name: string; description: string }[];
 }
 
 export interface Settings {
   claudePath?: string | null;
   codexPath?: string | null;
+  comfyuiUrl?: string | null;
   characters: Record<string, AgentConfig>;
 }
 
@@ -103,6 +106,12 @@ export interface Bootstrap {
   settings: Settings;
   dataDir: string;
   activeRuns: ActiveRun[];
+}
+
+export interface ComfyStatus {
+  url: string;
+  ok: boolean;
+  detail: string;
 }
 
 export interface AgentAvailability {

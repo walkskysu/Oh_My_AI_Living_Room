@@ -1,6 +1,11 @@
 """Seethrough layers -> cleaned, recoloured, autorig-friendly PSD.
 
-usage: build_psd.py <seethrough prefix> <original image> <alpha|white> <out dir> <name>
+usage: build_psd.py <seethrough prefix> <original image> <alpha|white> <out dir> <name> [fill]
+
+fill: painted pixels whose layer coverage is below this get filled (default 0.35;
+0.95 also closes half-transparent seams inside the figure). A fill above 0.5 also
+recolours layers under half-transparent edges of nearer layers (otherwise only where
+they are mostly uncovered), which removes colour seams.
 """
 import json, sys, glob, os
 import numpy as np
@@ -10,6 +15,8 @@ from psd_tools.api.layers import PixelLayer
 
 O = '/mnt/e/Comfy-Desktop/ComfyUI-Shared/output/'
 prefix, orig_path, bgmode, out, name = sys.argv[1:6]
+FILL = float(sys.argv[6]) if len(sys.argv) > 6 else 0.35
+COVER = 0.995 if FILL > 0.5 else 0.5
 m = json.load(open(sorted(glob.glob(O + prefix + '_*_layers.json'))[-1]))
 W, H = m['width'], m['height']
 
@@ -40,6 +47,17 @@ for l in sorted(m['layers'], key=lambda l: -l['depth_median']):  # far -> near
         continue
     layers.append([RENAME.get(l['name'], l['name'].replace(' ', '_').replace('-', '_')), a])
 
+# SPLIT="prop:stool:520" moves the part of layer `prop` below canvas y=520 into a new
+# layer `stool`, placed farthest back (e.g. furniture the character sits on, which must not
+# ride the torso like hand-held props do).
+for spec in filter(None, os.environ.get('SPLIT', '').split(',')):
+    src_nm, new_nm, y0 = spec.split(':'); y0 = int(y0)
+    for i, (nm, a) in enumerate(layers):
+        if nm == src_nm:
+            b = np.zeros_like(a); b[y0:] = a[y0:]; a[y0:, :, 3] = 0
+            layers.insert(0, [new_nm, b])
+            break
+
 comp_a = np.zeros((H, W), np.float32)
 for _, a in layers:
     comp_a = a[..., 3] / 255 + comp_a * (1 - a[..., 3] / 255)
@@ -55,12 +73,12 @@ else:
 # 1) recolour visible pixels of each layer from the original painting
 covered = np.zeros((H, W), np.float32)  # opacity of nearer layers
 for nm, a in reversed(layers):           # near -> far
-    vis = (a[..., 3] > 8) & (covered < 0.5) & orig_mask
+    vis = (a[..., 3] > 8) & (covered < COVER) & orig_mask
     a[vis, :3] = O_rgba[vis, :3]
     covered = covered + (1 - covered) * a[..., 3] / 255
 
 # 2) leftover painted pixels nobody covers -> layer that dominates the neighbourhood
-left = orig_mask & (comp_a < 0.35)
+left = orig_mask & (comp_a < FILL)
 if left.any():
     scores = []
     for nm, a in layers:
@@ -71,7 +89,7 @@ if left.any():
     for i, (nm, a) in enumerate(layers):
         sel = left & (owner == i)
         if sel.any():
-            a[sel, :3] = O_rgba[sel, :3]; a[sel, 3] = np.maximum(a[sel, 3], 255)
+            a[sel, :3] = O_rgba[sel, :3]; a[sel, 3] = 255
             print(f'  leftover {sel.sum():6d}px -> {nm}')
 
 os.makedirs(f'{out}/layers', exist_ok=True)
