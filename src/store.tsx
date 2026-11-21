@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
 import { getApi, type Api } from "./api";
-import type { Activity, ActiveRun, Character, Message, Settings, StatusPayload } from "./types";
+import type { Activity, ActiveRun, AgentAvailability, AgentConfig, Character, Message, Settings, StatusPayload } from "./types";
 
 export interface Toast {
   id: number;
@@ -26,6 +26,8 @@ interface State {
   /** Conversation currently shown for each character (null = new conversation). */
   activeConversation: Record<string, string | null>;
   toasts: Toast[];
+  /** Which harness CLIs were found on this machine (null until checked). */
+  agents: AgentAvailability[] | null;
   /** Bumped whenever the conversation list of a character might have changed. */
   convVersion: number;
 }
@@ -41,6 +43,7 @@ type Action =
   | { type: "open"; characterId: string | null }
   | { type: "setActiveConversation"; characterId: string; conversationId: string | null }
   | { type: "settings"; settings: Settings }
+  | { type: "agents"; agents: AgentAvailability[] }
   | { type: "toast"; toast: Omit<Toast, "id"> }
   | { type: "dismissToast"; id: number }
   | { type: "clearResult"; characterId: string };
@@ -114,6 +117,8 @@ function reducer(s: State, a: Action): State {
       return { ...s, activeConversation: { ...s.activeConversation, [a.characterId]: a.conversationId } };
     case "settings":
       return { ...s, settings: a.settings };
+    case "agents":
+      return { ...s, agents: a.agents };
     case "toast":
       return { ...s, toasts: [...s.toasts, { ...a.toast, id: toastSeq++ }].slice(-4) };
     case "dismissToast":
@@ -137,6 +142,7 @@ const initial: State = {
   openCharacterId: null,
   activeConversation: {},
   toasts: [],
+  agents: null,
   convVersion: 0,
 };
 
@@ -201,6 +207,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Detect the harness CLIs at startup, and again whenever their configured paths change.
+  const { claudePath, codexPath, deepseekPath } = state.settings;
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!state.ready || !api) return;
+    let stale = false;
+    api
+      .checkAgents()
+      .then((agents) => !stale && dispatch({ type: "agents", agents }))
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [state.ready, claudePath, codexPath, deepseekPath]);
+
   const value = useMemo(() => ({ state, dispatch, api: apiRef.current }), [state]);
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
@@ -209,6 +230,27 @@ export function useStore() {
   const ctx = useContext(StoreContext);
   if (!ctx) throw new Error("StoreProvider missing");
   return ctx;
+}
+
+export const providerName: Record<string, string> = { claude: "Claude Code", codex: "Codex", deepseek: "DeepSeek Harness" };
+export const providerBinary: Record<string, string> = { claude: "claude", codex: "codex", deepseek: "dsh" };
+
+export function agentConfigFor(state: Pick<State, "settings">, c: Character): AgentConfig {
+  return state.settings.characters[c.id] ?? c.agent;
+}
+
+/** Whether the harness CLI is installed; undefined while still checking. */
+export function agentAvailable(state: Pick<State, "agents">, provider: string): boolean | undefined {
+  if (!state.agents) return undefined;
+  return !!state.agents.find((a) => a.provider === provider)?.path;
+}
+
+/** Characters whose configured harness isn't installed on this machine. */
+export function missingAgents(state: Pick<State, "agents" | "settings" | "characters">) {
+  if (!state.agents) return [];
+  return state.characters
+    .map((c) => ({ character: c, provider: agentConfigFor(state, c).provider }))
+    .filter((m) => agentAvailable(state, m.provider) === false);
 }
 
 /** Activity derived from runs/results; "bored" is layered on top by the sprite's idle timer. */

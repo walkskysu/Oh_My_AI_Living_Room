@@ -7,7 +7,7 @@ description: 画图（文生图）、改图（换背景/换装/改风格/加减�
 
 先看系统提示 / AGENTS.md 里「画图工具」一节，确认你现在运行在哪个 harness 上（不需要另外执行命令去查）：
 
-- **Claude Code** → 用本目录的 `comfy.py` 调本地 ComfyUI（下文 A 部分）。
+- **Claude Code** 或 **DeepSeek Harness** → 用本目录的 `comfy.py` 调本地 ComfyUI（下文 A 部分）。
 - **Codex** → 用 Codex 内建的图片生成/编辑功能（下文 B 部分），不要调用 comfy.py。
 
 无论哪种方式，交付的图片都放在 `outputs/`，主人给的图片通常在 `inputs/`。
@@ -21,11 +21,11 @@ description: 画图（文生图）、改图（换背景/换装/改风格/加减�
 3. **生成** → **检查**：生成后用 Read 打开图片亲自看一眼（主体对不对、手和脸有没有崩、有没有多余文字/水印）。明显失败就调整提示词或换个 seed 重画一次，最多重试 2 次。
 4. **汇报**：一两句话 + 用反引号写出图片路径（例如 `outputs/橘猫晒太阳.png`，聊天窗口会直接显示缩略图）+ 最终提示词 + seed（方便复现）。
 
-## A. Claude Code：通过 ComfyUI
+## A. Claude Code / DeepSeek Harness：通过 ComfyUI
 
 脚本：`python .claude/skills/painting/comfy.py <命令> ...`（Windows 上 `python` 不可用时试 `py`，其他系统试 `python3`）。只用标准库，ComfyUI 地址取自环境变量 `COMFYUI_URL`。
 
-**这些命令要跑 1–5 分钟，调用 Bash 时一定要把超时设到 600000（10 分钟）。** 脚本最后一行输出一个 JSON：`{"ok": true, "files": [...], "seed": ...}` 或 `{"ok": false, "error": "..."}`。如果 Bash 超时而任务还在跑，用 `comfy.py wait <prompt_id> --out <同一个路径>` 继续取结果（prompt_id 在 stderr 的「已提交」那行里）。
+**这些命令要跑 1–5 分钟，调用 Bash 时一定要把超时设到 600000（10 分钟；DeepSeek Harness 的 bash 参数是 `timeoutMs`）。** 脚本最后一行输出一个 JSON：`{"ok": true, "files": [...], "seed": ...}` 或 `{"ok": false, "error": "..."}`。如果 Bash 超时而任务还在跑，用 `comfy.py wait <prompt_id> --out <同一个路径>` 继续取结果（prompt_id 在 stderr 的「已提交」那行里）。
 
 先确认连得上（每段对话第一次画图前跑一次即可；命令要原样以 `python .claude/skills/painting/comfy.py`/`python3 ...`/`py ...` 开头，用相对路径，不要加 `cd`、`echo` 或 `&&` 前缀，否则不在免确认名单里会被拦下）：
 

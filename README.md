@@ -1,12 +1,12 @@
 # Oh My AI Living Room
 
-一个温馨的「AI 客厅」桌面程序：客厅里住着几位角色，每位角色背后都是一个 CLI coding agent（Claude Code / Codex），有自己的人设、专长和 skills。点角色就能聊天或交代任务；她们在无聊、工作中、完成时会有不同的动画。
+一个温馨的「AI 客厅」桌面程序：客厅里住着几位角色，每位角色背后都是一个 CLI coding agent（Claude Code / Codex / DeepSeek Harness），有自己的人设、专长和 skills。点角色就能聊天或交代任务；她们在无聊、工作中、完成时会有不同的动画。
 
-第一版（v0.1）：Tauri 2 + React，已实现角色 **Iris（艾莉丝）**（阅读与写作）、**Poppy（波比）**（画图、改图、反推提示词、拆图层）和 **Claire（克莱尔）**（财经与股票技术分析），支持 Claude Code 与 Codex 两种 harness，所有对话存进 SQLite。
+第一版（v0.1）：Tauri 2 + React，已实现角色 **Iris（艾莉丝）**（阅读与写作）、**Poppy（波比）**（画图、改图、反推提示词、拆图层）和 **Claire（克莱尔）**（财经与股票技术分析），支持 Claude Code、Codex 与 DeepSeek Harness 三种 harness，所有对话存进 SQLite。
 
 ## 运行
 
-依赖：Node 20+、Rust（`rustup`）、Linux 上的 WebKitGTK 4.1 开发包（`libwebkit2gtk-4.1-dev` 等 Tauri 依赖），以及 `claude`（Claude Code CLI，已登录）和/或 `codex` CLI。
+依赖：Node 20+、Rust（`rustup`）、Linux 上的 WebKitGTK 4.1 开发包（`libwebkit2gtk-4.1-dev` 等 Tauri 依赖），以及 `claude`（Claude Code CLI，已登录）、`codex` CLI、`dsh`（DeepSeek Harness，`npm install -g @deepseek-ai/dsh`，需要 Node 24.9+，`DEEPSEEK_API_KEY` 放在环境变量或 `~/.dsh/.env`）中的至少一个。
 
 ```bash
 npm install
@@ -52,20 +52,21 @@ Windows 下数据（对话库、设置、角色工作目录）在 `%APPDATA%\ohm
 | Agent | 每个角色在自己的工作目录里运行 harness：`~/.local/share/com.ohmyai.livingroom/workspaces/<id>/`，产出放 `outputs/` |
 | 存储 | `~/.local/share/com.ohmyai.livingroom/living_room.db`：`conversations`（含 harness session id，用于续聊）+ `messages`（user / assistant / tool / error / system） |
 | 附件 | 把文件拖到窗口上或在输入框粘贴截图，会复制到该角色工作目录的 `inputs/`，消息里以 `` `inputs/xxx.png` `` 引用；对话中提到的 `inputs/`、`outputs/` 图片直接显示缩略图（双击用系统看图软件打开） |
+| Agent 检测 | 启动时（以及在设置里改了 CLI 路径后）检测本机有没有 `claude` / `codex` / `dsh`；有角色配置的 harness 本机找不到时，顶部弹出提示，列出是哪位角色、缺哪个命令，可以直接打开设置。该角色聊天窗的 harness 标签显示「未安装」，「关于她」的下拉框里也会标出未安装的 harness。浏览器预览可以用 `?missing=claude,dsh` 模拟 |
 | 通知 | 对话框关闭时任务完成/出错会弹出 toast，点 toast 直接打开那段对话 |
 
 ## Poppy 的画图能力
 
-| | Claude Code | Codex |
+| | Claude Code / DeepSeek Harness | Codex |
 |---|---|---|
 | 画图 / 改图 | `painting` skill → `comfy.py`（纯标准库）调用 ComfyUI：Qwen-Image 2.1 文生图 / 编辑 | Codex 内建图片生成 |
 | 反推提示词 | `image-prompt-reverse` skill（[LunarXuan/image-prompt-reverse](https://github.com/LunarXuan/image-prompt-reverse)，GPL-3.0，原样收录）；可选 `comfy.py describe` 用 Qwen3-VL 先描述一遍作参考 | 同一 skill，直接看图 |
 | 拆图层 | `comfy.py layers`（See-through，输出分层 PNG + PSD） | 不支持 |
 
-- ComfyUI 地址在「客厅设置 → ComfyUI」里配置（默认 `http://127.0.0.1:8188`，带连接检测），以环境变量 `COMFYUI_URL` 传给 agent；`LIVING_ROOM_HARNESS` 告诉 skill 当前是 `claude` 还是 `codex`。
+- ComfyUI 地址在「客厅设置 → ComfyUI」里配置（默认 `http://127.0.0.1:8188`，带连接检测），以环境变量 `COMFYUI_URL` 传给 agent；`LIVING_ROOM_HARNESS` 告诉 skill 当前是 `claude`、`codex` 还是 `deepseek`。
 - 工作流以 API 格式放在 `characters/poppy/skills/painting/workflows/`（由 ComfyUI 中保存的 `image_qwen_image_2_1_t2i` / `image_qwen_image_2_1_image_edit` / `QWenVL_desc_image_prompt` / `seethrough-basic` 转换而来），ComfyUI 端需装好对应模型和节点。
 - `character.json` 的 `allowedTools`（如 `Bash(python3 .claude/skills/painting/comfy.py:*)`）以 `--allowedTools` 传给 Claude Code：无头模式没法弹确认框，skill 要跑的脚本必须预先放行（工作目录未被信任时 `.claude/settings.json` 里的 allow 会被忽略，所以不用它）。Iris 的 `to_pdf.py` 也同样放行。
-- `character.json` 的 `harnessNotes.{claude,codex}` 会分别追加到 Claude Code 的系统提示（persona.md）和 Codex 的 `AGENTS.md`，用来告诉角色在当前 harness 下该用哪种画图工具。
+- `character.json` 的 `harnessNotes.{claude,codex,deepseek}` 会分别追加到 Claude Code 的系统提示（persona.md）、Codex 的 `AGENTS.md` 和 DeepSeek Harness 的 persona（`dsh.patch.yml`），用来告诉角色在当前 harness 下该用哪种画图工具。
 
 ## Claire 的理财能力
 
@@ -80,14 +81,21 @@ Windows 下数据（对话库、设置、角色工作目录）在 `%APPDATA%\ohm
 
 ## Agent harness 适配（`src-tauri/src/agent.rs`）
 
-| | Claude Code | Codex |
-|---|---|---|
-| 命令 | `claude -p --output-format stream-json --verbose --include-partial-messages --permission-mode <mode> --append-system-prompt-file <workspace>/.living-room/persona.md [--model m] [--resume <sid>]` | `codex exec --json --skip-git-repo-check --sandbox workspace-write [--model m] [resume <thread>] -` |
-| 人设 | `--append-system-prompt-file` | 工作目录里的 `AGENTS.md` |
-| Skills | 复制到 `<workspace>/.claude/skills/`（项目级 skills） | 在 `AGENTS.md` 里列出并指向 SKILL.md |
-| 续聊 | `system/init.session_id` | `thread.started.thread_id` |
+| | Claude Code | Codex | DeepSeek Harness |
+|---|---|---|---|
+| 命令 | `claude -p --output-format stream-json --verbose --include-partial-messages --permission-mode <mode> --append-system-prompt-file <workspace>/.living-room/persona.md [--model m] [--resume <sid>]` | `codex exec --json --skip-git-repo-check --sandbox workspace-write [--model m] [resume <thread>] -` | `dsh --profile headless --patch <workspace>/.living-room/dsh.patch.yml --json --permission-mode workspace-write --approval-policy never [--session-id <sid>] -` |
+| 人设 | `--append-system-prompt-file` | 工作目录里的 `AGENTS.md` | patch 覆盖 `system-prompt.personaPrefix`（并关掉 `agent-instructions`，不读给 Codex 用的 `AGENTS.md`） |
+| Skills | 复制到 `<workspace>/.claude/skills/`（项目级 skills） | 在 `AGENTS.md` 里列出并指向 SKILL.md | patch 把 `.claude/skills` 加到 `skill-filesystem.customSkillDirs`，原生 `skill` 工具加载 |
+| 模型 | `--model` | `--model` | patch 覆盖 `agent-default-model`（`deepseek-flash` / `deepseek-v4-pro`，默认 flash） |
+| 续聊 | `system/init.session_id` | `thread.started.thread_id` | `session.sessionId` |
 
 两种输出都被解析成统一事件：`session / delta / message / tool / toolResult / done`，通过 Tauri 事件 `agent-event`、`agent-status`（`running` → `working` → `finished`，带 `worked` 标记）推给前端。Prompt 走 stdin。GUI 启动时会自动把 `~/.local/bin`、`~/.npm-global/bin` 等加入 PATH，也可在设置里手动指定 CLI 路径。
+
+DeepSeek Harness 的说明：
+- `bypassPermissions` 映射为 `danger-full-access`，其余为 `workspace-write`（沙箱内可写工作目录、可联网）；无头模式没法确认，所以固定 `--approval-policy never`，需要审批的调用直接被拒绝而不是卡住。`allowedTools` 只对 Claude Code 生效。
+- `--json` 的 `text` 是整条提交的消息，不是逐 token 流，所以 DeepSeek 下回复是一段一段出现的。
+- persona 里会附一段工具名对照（Read → read、WebSearch → web_search…），技能文档里的 Claude Code 工具名不用改。切换 harness 时会清空模型设置（模型名不通用）。
+- 可以用 `LR_CHAR=claire LR_PROMPT='…' cargo test --lib dsh_live -- --ignored --nocapture`（在 `src-tauri/`）走和 App 相同的代码路径实测一次。
 
 > 已在 Linux（WSL2/WSLg）用 Claude Code 2.1.327 实测聊天、续聊、派任务写文件、使用 skill。Codex 适配按 `codex exec --json` 的事件格式实现并有单元测试，但本机未安装 codex，尚未实机验证。
 

@@ -1,5 +1,5 @@
 export type Activity = "reading" | "bored" | "working" | "chatting" | "done" | "error";
-export type ProviderId = "claude" | "codex";
+export type ProviderId = "claude" | "codex" | "deepseek";
 
 /** A pose: either a still image (animated with CSS) or a sprite sheet (TexturePacker JSON hash). */
 export interface SpriteDef {
@@ -43,6 +43,7 @@ export interface Character {
 export interface Settings {
   claudePath?: string | null;
   codexPath?: string | null;
+  deepseekPath?: string | null;
   comfyuiUrl?: string | null;
   characters: Record<string, AgentConfig>;
 }

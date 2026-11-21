@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { isTauri } from "../api";
-import { baseActivity, labelFor, useStore } from "../store";
+import { agentAvailable, baseActivity, labelFor, providerName, useStore } from "../store";
 import type { AgentConfig, Character, Conversation, Message } from "../types";
 import { Markdown } from "./Markdown";
 import { extractFiles, FileCards, ImageThumb } from "./FileCards";
 
 type Tab = "chat" | "history" | "profile";
 
-const providerName: Record<string, string> = { claude: "Claude Code", codex: "Codex" };
+const modelHint: Record<string, string> = { claude: "sonnet / opus", codex: "gpt-5", deepseek: "deepseek-flash / deepseek-v4-pro" };
 
 function fmtTime(iso: string) {
   const d = new Date(iso);
@@ -64,6 +64,8 @@ export function ChatPanel({ character }: { character: Character }) {
   const runningHere = !!run && run.conversationId === convId;
   const activity = baseActivity(state, character.id);
   const agentCfg: AgentConfig = state.settings.characters[character.id] ?? character.agent;
+  const agentMissing = agentAvailable(state, agentCfg.provider) === false;
+  const optLabel = (id: string) => `${providerName[id]}${agentAvailable(state, id) === false ? "（本机未安装）" : ""}`;
 
   const refreshConversations = useCallback(async () => {
     if (!api) return;
@@ -190,7 +192,9 @@ export function ChatPanel({ character }: { character: Character }) {
           <div className="title">{character.title}</div>
           <div className="badges">
             <span className={`pill s-${activity}`}>{labelFor(character, activity)}</span>
-            <span className="pill ghost">{providerName[agentCfg.provider] ?? agentCfg.provider}</span>
+            <span className={`pill ${agentMissing ? "bad" : "ghost"}`} title={agentMissing ? "本机没找到这个 harness 的命令行" : undefined}>
+              {providerName[agentCfg.provider] ?? agentCfg.provider}{agentMissing && " · 未安装"}
+            </span>
           </div>
         </div>
         <div className="head-actions">
@@ -367,16 +371,19 @@ export function ChatPanel({ character }: { character: Character }) {
           <div className="form">
             <label>
               Harness
-              <select value={agentCfg.provider} onChange={(e) => saveAgent({ provider: e.target.value })}>
-                <option value="claude">Claude Code</option>
-                <option value="codex">Codex</option>
+              {/* model names don't carry over between harnesses, so switching clears it */}
+              <select value={agentCfg.provider} onChange={(e) => saveAgent({ provider: e.target.value, model: null })}>
+                <option value="claude">{optLabel("claude")}</option>
+                <option value="codex">{optLabel("codex")}</option>
+                <option value="deepseek">{optLabel("deepseek")}</option>
               </select>
             </label>
             <label>
               模型
               <input
+                key={agentCfg.provider}
                 defaultValue={agentCfg.model ?? ""}
-                placeholder="默认（例如 sonnet / opus / gpt-5）"
+                placeholder={`默认（例如 ${modelHint[agentCfg.provider] ?? "sonnet / gpt-5"}）`}
                 onBlur={(e) => saveAgent({ model: e.target.value.trim() || null })}
               />
             </label>

@@ -1,5 +1,6 @@
 //! Agent harness adapters. Each character is backed by a CLI coding agent
-//! (Claude Code or Codex) running headless in the character's workspace.
+//! (Claude Code, Codex or DeepSeek Harness `dsh`) running headless in the
+//! character's workspace.
 //! Output is parsed line-by-line (JSONL) into a small normalized event set.
 
 use serde::Serialize;
@@ -10,6 +11,8 @@ use std::path::{Path, PathBuf};
 pub enum Provider {
     Claude,
     Codex,
+    /// DeepSeek Harness (`dsh --profile headless`).
+    Deepseek,
 }
 
 impl Provider {
@@ -17,6 +20,7 @@ impl Provider {
         match s {
             "claude" => Some(Self::Claude),
             "codex" => Some(Self::Codex),
+            "deepseek" => Some(Self::Deepseek),
             _ => None,
         }
     }
@@ -24,10 +28,14 @@ impl Provider {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Deepseek => "deepseek",
         }
     }
     pub fn binary(&self) -> &'static str {
-        self.as_str()
+        match self {
+            Self::Deepseek => "dsh",
+            other => other.as_str(),
+        }
     }
 }
 
@@ -61,6 +69,9 @@ pub struct RunSpec<'a> {
     /// File holding the persona (system prompt addition). A file instead of an
     /// argument keeps multi-line text off the command line (Windows .cmd shims reject it).
     pub persona_file: &'a Path,
+    /// DeepSeek Harness `--patch` overlay (persona, skill roots, model), see
+    /// `characters::write_dsh_patch`.
+    pub dsh_patch: &'a Path,
     pub model: Option<&'a str>,
     pub permission_mode: &'a str,
     pub resume: Option<&'a str>,
@@ -112,6 +123,22 @@ pub fn build_command(spec: &RunSpec) -> tokio::process::Command {
             }
             if let Some(r) = spec.resume {
                 cmd.args(["resume", r]);
+            }
+            cmd.arg("-"); // read prompt from stdin
+        }
+        Provider::Deepseek => {
+            // `--patch` is a launcher flag and must precede the app's own flags.
+            // Persona, skill roots and the model come from the patch overlay.
+            cmd.args(["--profile", "headless", "--patch"]).arg(spec.dsh_patch);
+            let preset = if spec.permission_mode == "bypassPermissions" {
+                "danger-full-access"
+            } else {
+                "workspace-write"
+            };
+            // Headless runs can't answer approval prompts: reject instead of hanging.
+            cmd.args(["--json", "--permission-mode", preset, "--approval-policy", "never"]);
+            if let Some(r) = spec.resume {
+                cmd.args(["--session-id", r]);
             }
             cmd.arg("-"); // read prompt from stdin
         }
@@ -177,6 +204,7 @@ pub fn parse_line(provider: Provider, line: &str) -> Vec<AgentEvent> {
     match provider {
         Provider::Claude => parse_claude(&v),
         Provider::Codex => parse_codex(&v),
+        Provider::Deepseek => parse_dsh(&v),
     }
 }
 
@@ -357,6 +385,125 @@ fn parse_codex(v: &Value) -> Vec<AgentEvent> {
         "error" => out.push(AgentEvent::Done {
             ok: false,
             error: Some(v["message"].as_str().unwrap_or("error").to_string()),
+            cost_usd: None,
+            duration_ms: None,
+        }),
+        _ => {}
+    }
+    out
+}
+
+/// Short description of a DeepSeek Harness tool call (snake_case tool names).
+fn summarize_dsh_tool(name: &str, input: &Value) -> String {
+    let pick = |k: &str| input.get(k).and_then(Value::as_str).map(str::to_string);
+    let s = match name {
+        "bash" | "bash_persistent" => pick("command"),
+        "read" | "read_image" | "write" | "edit" | "str_replace_editor" => pick("file_path").or_else(|| pick("path")),
+        "glob" | "grep" => pick("pattern"),
+        "web_fetch" => pick("url"),
+        "web_search" => pick("query").or_else(|| {
+            input.get("queries").and_then(Value::as_array).map(|q| {
+                q.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" / ")
+            })
+        }),
+        "skill" => pick("name"),
+        "subagent" | "task" => pick("description"),
+        "todo" | "todo_write" => Some("更新待办清单".into()),
+        _ => pick("description"),
+    };
+    truncate(&s.unwrap_or_else(|| input.to_string()), 200)
+}
+
+/// Display names matching the Claude Code ones the UI already knows.
+fn dsh_tool_name(name: &str) -> String {
+    match name {
+        "bash" | "bash_persistent" => "Bash".into(),
+        "read" | "read_image" => "Read".into(),
+        "write" => "Write".into(),
+        "edit" | "str_replace_editor" => "Edit".into(),
+        "glob" => "Glob".into(),
+        "grep" => "Grep".into(),
+        "web_search" => "WebSearch".into(),
+        "web_fetch" => "WebFetch".into(),
+        "skill" => "Skill".into(),
+        other => other.into(),
+    }
+}
+
+fn dsh_reason_error(reason: &Value) -> String {
+    let kind = reason["kind"].as_str().unwrap_or("error");
+    let msg = reason["message"]
+        .as_str()
+        .or_else(|| reason["error"]["message"].as_str())
+        .or_else(|| reason["error"].as_str());
+    match (reason["code"].as_str().or_else(|| reason["error"]["code"].as_str()), msg) {
+        (Some(c), Some(m)) => format!("{c}: {m}"),
+        (None, Some(m)) => m.to_string(),
+        _ if kind == "aborted" => "已中止".into(),
+        _ if reason.is_null() => "DeepSeek harness 没有完成这一轮".into(),
+        _ => format!("DeepSeek harness: {kind}"),
+    }
+}
+
+/// `dsh --profile headless --json` events: session / status / thinking / text /
+/// tool_call / tool_result / final (or error when the runner fails outside a turn).
+fn parse_dsh(v: &Value) -> Vec<AgentEvent> {
+    let mut out = vec![];
+    match v.get("type").and_then(Value::as_str).unwrap_or("") {
+        "session" => {
+            if let Some(id) = v["sessionId"].as_str() {
+                out.push(AgentEvent::Session { session_id: id.into() });
+            }
+        }
+        // `text` events are committed assistant messages, not token deltas.
+        "text" => {
+            let t = v["text"].as_str().unwrap_or("").trim();
+            if !t.is_empty() {
+                out.push(AgentEvent::Message { text: t.into() });
+            }
+        }
+        "tool_call" => {
+            let raw = v["tool"].as_str().unwrap_or("tool");
+            out.push(AgentEvent::Tool {
+                name: dsh_tool_name(raw),
+                summary: summarize_dsh_tool(raw, &v["input"]),
+            });
+        }
+        "tool_result" => {
+            let ok = v["status"].as_str() == Some("completed") && v.get("error").map_or(true, Value::is_null);
+            let mut output = match &v["result"] {
+                Value::String(s) => s.clone(),
+                Value::Null => String::new(),
+                other => tool_result_text(other),
+            };
+            if output.is_empty() && !ok {
+                output = v["error"]["reason"]
+                    .as_str()
+                    .or_else(|| v["error"]["code"].as_str())
+                    .unwrap_or("tool failed")
+                    .to_string();
+            }
+            out.push(AgentEvent::ToolResult { ok, output: truncate(&output, 1500) });
+        }
+        "final" => {
+            let reason = &v["reason"];
+            let ok = reason["kind"].as_str() == Some("completed");
+            out.push(AgentEvent::Done {
+                ok,
+                error: (!ok).then(|| dsh_reason_error(reason)),
+                cost_usd: None,
+                duration_ms: None,
+            });
+        }
+        "error" => out.push(AgentEvent::Done {
+            ok: false,
+            error: Some(
+                v["message"]
+                    .as_str()
+                    .or_else(|| v["error"]["message"].as_str())
+                    .unwrap_or("DeepSeek harness error")
+                    .to_string(),
+            ),
             cost_usd: None,
             duration_ms: None,
         }),
