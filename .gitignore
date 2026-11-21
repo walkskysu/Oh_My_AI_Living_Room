@@ -8,3 +8,6 @@ art/layers
 art/poppy/gen
 art/poppy/layers
 art/poppy/src/_*
+art/claire/gen
+art/claire/layers
+__pycache__/
