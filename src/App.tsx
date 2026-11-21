@@ -3,7 +3,7 @@ import { isTauri } from "./api";
 import { CharacterSprite } from "./components/CharacterSprite";
 import { ChatPanel } from "./components/ChatPanel";
 import { SettingsDialog } from "./components/SettingsDialog";
-import { useStore } from "./store";
+import { missingAgents, providerBinary, providerName, useStore } from "./store";
 
 const STAGE_W = 1672;
 const STAGE_H = 941;
@@ -50,6 +50,10 @@ export default function App() {
   const { scale, width: roomW } = useStageScale(wrap);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const open = state.characters.find((c) => c.id === state.openCharacterId);
+  const missing = missingAgents(state);
+  // Dismissing hides this exact set; a new missing agent shows the banner again.
+  const missingKey = missing.map((m) => `${m.character.id}:${m.provider}`).join(",");
+  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
 
   // Open links from chat in the system browser.
   useEffect(() => {
@@ -118,6 +122,27 @@ export default function App() {
 
       {!state.ready && !state.error && <div className="loading">正在打开客厅的门…</div>}
       {state.error && <div className="loading error">启动失败：{state.error}</div>}
+
+      {missing.length > 0 && dismissedKey !== missingKey && (
+        <div className="agent-warning" role="alert">
+          <div className="agent-warning-text">
+            <b>有角色的 agent 在这台电脑上找不到</b>
+            <ul>
+              {missing.map(({ character: c, provider }) => (
+                <li key={c.id}>
+                  <button className="link" onClick={() => dispatch({ type: "open", characterId: c.id })}>{c.name}</button>
+                  使用 {providerName[provider] ?? provider}，但没找到 <code>{providerBinary[provider] ?? provider}</code> 命令
+                </li>
+              ))}
+            </ul>
+            <span className="muted">请先安装，或在「设置」里填写命令的完整路径；也可以在「关于她」里给她换一个已安装的 harness。</span>
+          </div>
+          <div className="agent-warning-actions">
+            <button className="btn" onClick={() => setSettingsOpen(true)}>打开设置</button>
+            <button className="icon-btn" title="知道了" onClick={() => setDismissedKey(missingKey)}>✕</button>
+          </div>
+        </div>
+      )}
 
       {open && <ChatPanel key={open.id} character={open} />}
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}

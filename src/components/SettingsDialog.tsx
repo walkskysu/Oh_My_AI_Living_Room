@@ -7,6 +7,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [agents, setAgents] = useState<AgentAvailability[] | null>(null);
   const [claudePath, setClaudePath] = useState(state.settings.claudePath ?? "");
   const [codexPath, setCodexPath] = useState(state.settings.codexPath ?? "");
+  const [deepseekPath, setDeepseekPath] = useState(state.settings.deepseekPath ?? "");
   const [comfyUrl, setComfyUrl] = useState(state.settings.comfyuiUrl ?? "");
   const [comfy, setComfy] = useState<ComfyStatus | null | "checking">(null);
   const [saved, setSaved] = useState(false);
@@ -28,6 +29,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       ...state.settings,
       claudePath: claudePath.trim() || null,
       codexPath: codexPath.trim() || null,
+      deepseekPath: deepseekPath.trim() || null,
       comfyuiUrl: comfyUrl.trim() || null,
     };
     await api?.saveSettings(next);
@@ -37,7 +39,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     checkComfy();
   };
 
-  const row = (id: "claude" | "codex", label: string, value: string, set: (v: string) => void) => {
+  const row = (id: "claude" | "codex" | "deepseek", bin: string, label: string, value: string, set: (v: string) => void) => {
     const a = agents?.find((x) => x.provider === id);
     return (
       <div className="agent-row">
@@ -51,7 +53,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <span className="pill bad">未找到</span>
           )}
         </div>
-        <input value={value} placeholder={a?.path ?? `自动在 PATH 中查找 ${id}`} onChange={(e) => { set(e.target.value); setSaved(false); }} />
+        <input value={value} placeholder={a?.path ?? `自动在 PATH 中查找 ${bin}`} onChange={(e) => { set(e.target.value); setSaved(false); }} />
       </div>
     );
   };
@@ -65,9 +67,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         </header>
         <section>
           <h4>Agent Harness 命令行</h4>
-          {row("claude", "Claude Code", claudePath, setClaudePath)}
-          {row("codex", "Codex", codexPath, setCodexPath)}
-          <p className="muted">每个角色可在「关于她」里选择使用哪一个 harness。DeepSeek harness 将在后续版本支持。</p>
+          {row("claude", "claude", "Claude Code", claudePath, setClaudePath)}
+          {row("codex", "codex", "Codex", codexPath, setCodexPath)}
+          {row("deepseek", "dsh", "DeepSeek Harness", deepseekPath, setDeepseekPath)}
+          <p className="muted">每个角色可在「关于她」里选择使用哪一个 harness。DeepSeek Harness 以 <code>dsh --profile headless</code> 运行，API Key 读取环境变量或 <code>~/.dsh/.env</code> 里的 <code>DEEPSEEK_API_KEY</code>。</p>
         </section>
         <section>
           <h4>ComfyUI（画图）</h4>
@@ -89,7 +92,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               onBlur={() => checkComfy()}
             />
           </div>
-          <p className="muted">使用 Claude Code 的角色（例如 Poppy）通过这个 ComfyUI 画图、改图、反推提示词、拆图层；使用 Codex 时改用 Codex 内建的画图功能。</p>
+          <p className="muted">使用 Claude Code 或 DeepSeek Harness 的角色（例如 Poppy）通过这个 ComfyUI 画图、改图、反推提示词、拆图层；使用 Codex 时改用 Codex 内建的画图功能。</p>
         </section>
         <section>
           <h4>数据位置</h4>

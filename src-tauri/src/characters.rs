@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentConfig {
-    /// "claude" | "codex"
+    /// "claude" | "codex" | "deepseek"
     #[serde(default = "default_provider")]
     pub provider: String,
     #[serde(default)]
@@ -60,8 +60,9 @@ pub struct Character {
     pub activity_labels: serde_json::Value,
     #[serde(default)]
     pub bored_after_sec: Option<u64>,
-    /// Extra persona text per harness ("claude" / "codex"), e.g. which image
-    /// tool to use. Claude's goes into persona.md, Codex's into AGENTS.md.
+    /// Extra persona text per harness ("claude" / "codex" / "deepseek"), e.g.
+    /// which image tool to use. Claude's goes into persona.md, Codex's into
+    /// AGENTS.md, DeepSeek's into the `dsh` patch overlay.
     #[serde(default)]
     pub harness_notes: HashMap<String, String>,
     /// Claude Code permission rules the character may always use, e.g. the
@@ -209,6 +210,38 @@ pub fn allowed_tools(c: &Character, ws: &Path) -> Vec<String> {
     out
 }
 
+/// Tells the DeepSeek agent how the Claude Code tool names used in skills map
+/// onto its own tools.
+const DSH_TOOL_NOTE: &str = "## 工具名称对照（你现在运行在 DeepSeek Harness 上）\n技能说明里提到的 Claude Code 工具对应你自己的工具：Read → read，Write → write，Edit → edit，Bash → bash，WebSearch → web_search，WebFetch → web_fetch，Skill → skill。技能目录在 `.claude/skills/<name>/`，脚本用相对路径运行（例如 `python3 .claude/skills/<name>/xxx.py`）。运行耗时较长的脚本（画图、生成 PDF 等）时，把 bash 的 timeoutMs 设到 600000；如果命令被转为后台任务，用 job_output（wait: true）取结果。";
+
+/// Write the `dsh --patch` overlay for this run and return its path:
+/// * the persona (plus DeepSeek notes) as the system-prompt persona prefix
+/// * `.claude/skills` as an extra skill root (so skills keep their paths)
+/// * `AGENTS.md` loading off (it carries the Codex-specific notes)
+/// * the model, when one is configured
+///
+/// The file is JSON, which is valid YAML, so no escaping rules beyond JSON apply.
+pub fn write_dsh_patch(c: &Character, ws: &Path, model: Option<&str>) -> std::io::Result<PathBuf> {
+    // `{{name}}` is template syntax in dsh prompts; an unknown name fails the run.
+    let persona = format!("{}\n\n{}", with_notes(c, "deepseek").trim_end(), DSH_TOOL_NOTE).replace("{{", "{ {");
+    let skills = ws.join(".claude").join("skills");
+    let mut patch = vec![
+        serde_json::json!({ "id": "system-prompt", "config": { "personaPrefix": persona } }),
+        serde_json::json!({ "id": "skill-filesystem", "config": { "customSkillDirs": [skills.to_string_lossy()] } }),
+        serde_json::json!({ "id": "agent-instructions", "disabled": true }),
+    ];
+    if let Some(m) = model.map(str::trim).filter(|m| !m.is_empty()) {
+        patch.push(serde_json::json!({
+            "id": "agent-default-model",
+            "config": { "provider": "deepseek-official", "model": m }
+        }));
+    }
+    let path = ws.join(".living-room").join("dsh.patch.yml");
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    std::fs::write(&path, serde_json::to_string_pretty(&patch).map_err(std::io::Error::other)?)?;
+    Ok(path)
+}
+
 /// Where the persona text for `--append-system-prompt-file` is written.
 pub fn persona_file(ws: &Path) -> PathBuf {
     ws.join(".living-room").join("persona.md")
@@ -228,5 +261,22 @@ mod tests {
         let names: Vec<_> = claire.skills.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["financial-analysis", "stock-analysis"]);
         assert!(claire.allowed_tools.iter().any(|t| t.contains("stock-analysis/stock.py")));
+    }
+
+    #[test]
+    fn dsh_patch_carries_persona_skills_and_model() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../characters");
+        let poppy = load_all(&root).into_iter().find(|c| c.id == "poppy").expect("poppy");
+        let ws = std::env::temp_dir().join(format!("lr-dsh-{}", std::process::id()));
+        let path = write_dsh_patch(&poppy, &ws, Some("deepseek-v4-pro")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let rows = v.as_array().unwrap();
+        let persona = rows[0]["config"]["personaPrefix"].as_str().unwrap();
+        assert!(persona.contains("Poppy") && persona.contains("DeepSeek"));
+        assert!(!persona.contains("{{"));
+        assert!(rows[1]["config"]["customSkillDirs"][0].as_str().unwrap().ends_with("skills"));
+        assert_eq!(rows[2]["disabled"], true);
+        assert_eq!(rows[3]["config"]["model"], "deepseek-v4-pro");
+        let _ = std::fs::remove_dir_all(&ws);
     }
 }

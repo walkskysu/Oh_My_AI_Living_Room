@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 CANDIDATES = [
@@ -42,11 +43,17 @@ def main():
     if not browser:
         sys.exit("未找到 Edge / Chrome / Chromium，无法生成 PDF")
     out.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [browser, "--headless", "--disable-gpu", "--no-pdf-header-footer",
-         f"--print-to-pdf={out}", src.as_uri()],
-        check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120,
-    )
+    args = [browser, "--headless", "--disable-gpu", "--no-pdf-header-footer"]
+    # Inside the DeepSeek Harness sandbox the default browser profile isn't
+    # writable and Chromium can't nest its own sandbox on Linux.
+    if os.environ.get("LIVING_ROOM_HARNESS") == "deepseek" and sys.platform.startswith("linux"):
+        args.append("--no-sandbox")
+    # A throwaway profile next to the output (always writable) instead of the user's.
+    with tempfile.TemporaryDirectory(prefix=".pdf-profile-", dir=out.parent, ignore_cleanup_errors=True) as prof:
+        subprocess.run(
+            args + [f"--user-data-dir={prof}", f"--print-to-pdf={out}", src.as_uri()],
+            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120,
+        )
     if not out.is_file() or out.stat().st_size == 0:
         sys.exit("PDF 生成失败")
     print(out)

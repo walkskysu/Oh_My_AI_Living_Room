@@ -21,6 +21,9 @@ pub struct Settings {
     pub claude_path: Option<String>,
     #[serde(default)]
     pub codex_path: Option<String>,
+    /// DeepSeek Harness launcher (`dsh`).
+    #[serde(default)]
+    pub deepseek_path: Option<String>,
     /// ComfyUI server the painting skills talk to (Claude Code harness).
     #[serde(default)]
     pub comfyui_url: Option<String>,
@@ -138,6 +141,7 @@ async fn check_agents(state: State<'_, AppState>) -> Result<Vec<AgentAvailabilit
     for (p, ov) in [
         (Provider::Claude, settings.claude_path.clone()),
         (Provider::Codex, settings.codex_path.clone()),
+        (Provider::Deepseek, settings.deepseek_path.clone()),
     ] {
         let path = agent::resolve_binary(p, ov.as_deref());
         let mut version = None;
@@ -508,6 +512,7 @@ async fn send_message(
     let override_path = match provider {
         Provider::Claude => settings.claude_path.clone(),
         Provider::Codex => settings.codex_path.clone(),
+        Provider::Deepseek => settings.deepseek_path.clone(),
     };
     let binary = agent::resolve_binary(provider, override_path.as_deref()).ok_or_else(|| {
         format!(
@@ -544,11 +549,17 @@ async fn send_message(
     let ws = state.workspace(&character_id);
     characters::prepare_workspace(&character, &ws).map_err(err)?;
     let persona_file = characters::persona_file(&ws);
+    let dsh_patch = if provider == Provider::Deepseek {
+        characters::write_dsh_patch(&character, &ws, cfg.model.as_deref()).map_err(err)?
+    } else {
+        PathBuf::new()
+    };
     let mut cmd = agent::build_command(&RunSpec {
         provider,
         binary,
         workspace: &ws,
         persona_file: &persona_file,
+        dsh_patch: &dsh_patch,
         model: cfg.model.as_deref(),
         permission_mode: &cfg.permission_mode,
         resume: resume.as_deref(),
@@ -905,6 +916,7 @@ mod tests {
             binary: "claude".into(),
             workspace: ws,
             persona_file: &ws.join("persona.md"),
+            dsh_patch: &ws.join("dsh.patch.yml"),
             model: None,
             permission_mode: "acceptEdits",
             resume: None,
@@ -951,4 +963,110 @@ mod tests {
         let d = r#"{"type":"turn.completed","usage":{}}"#;
         assert!(matches!(&parse_line(Provider::Codex, d)[0], AgentEvent::Done{ok:true,..}));
     }
+
+    #[test]
+    fn deepseek_command_uses_headless_profile_and_patch() {
+        let ws = std::path::Path::new("/tmp/ws");
+        let cmd = build_command(&RunSpec {
+            provider: Provider::Deepseek,
+            binary: "dsh".into(),
+            workspace: ws,
+            persona_file: &ws.join("persona.md"),
+            dsh_patch: &ws.join("dsh.patch.yml"),
+            model: Some("deepseek-v4-pro"),
+            permission_mode: "acceptEdits",
+            resume: Some("session-1"),
+            allowed_tools: vec![],
+            env: vec![],
+        });
+        let std = cmd.as_std();
+        let args: Vec<_> = std.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(
+            args,
+            ["--profile", "headless", "--patch", "/tmp/ws/dsh.patch.yml", "--json", "--permission-mode", "workspace-write", "--approval-policy", "never", "--session-id", "session-1", "-"]
+        );
+        let envs: Vec<_> = std.get_envs().map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()))).collect();
+        assert!(envs.contains(&("LIVING_ROOM_HARNESS".into(), Some("deepseek".into()))));
+    }
+
+    #[test]
+    fn parses_dsh_stream() {
+        let lines = [
+            r#"{"type":"session","sessionId":"session-abc","cwd":"/w"}"#,
+            r#"{"type":"status","phase":"turn_start","turn":1}"#,
+            r#"{"type":"thinking","text":"hmm"}"#,
+            r#"{"type":"text","text":"现在读取 a.txt："}"#,
+            r#"{"type":"tool_call","callId":"c1","tool":"read","input":{"file_path":"a.txt"}}"#,
+            r#"{"type":"tool_result","callId":"c1","status":"completed","result":"hello"}"#,
+            r#"{"type":"tool_call","callId":"c2","tool":"bash","input":{"description":"Run","command":"python3 x.py"}}"#,
+            r#"{"type":"tool_result","callId":"c2","status":"failed","error":{"name":"ToolError","code":"DENIED","reason":"approval required"}}"#,
+            r#"{"type":"final","sessionId":"session-abc","reason":{"kind":"completed"},"text":"done"}"#,
+        ];
+        let evs: Vec<_> = lines.iter().flat_map(|l| parse_line(Provider::Deepseek, l)).collect();
+        assert!(matches!(&evs[0], AgentEvent::Session{session_id} if session_id=="session-abc"));
+        assert!(matches!(&evs[1], AgentEvent::Message{text} if text=="现在读取 a.txt："));
+        assert!(matches!(&evs[2], AgentEvent::Tool{name, summary} if name=="Read" && summary=="a.txt"));
+        assert!(matches!(&evs[3], AgentEvent::ToolResult{ok:true, output} if output=="hello"));
+        assert!(matches!(&evs[4], AgentEvent::Tool{name, summary} if name=="Bash" && summary=="python3 x.py"));
+        assert!(matches!(&evs[5], AgentEvent::ToolResult{ok:false, output} if output=="approval required"));
+        assert!(matches!(&evs[6], AgentEvent::Done{ok:true, error:None, ..}));
+        assert_eq!(evs.len(), 7);
+
+        let failed = r#"{"type":"final","sessionId":"s","reason":{"kind":"error","code":"LLM_ERROR","message":"401"}}"#;
+        assert!(matches!(&parse_line(Provider::Deepseek, failed)[0], AgentEvent::Done{ok:false, error:Some(e), ..} if e=="LLM_ERROR: 401"));
+        let err = r#"{"type":"error","message":"unknown session"}"#;
+        assert!(matches!(&parse_line(Provider::Deepseek, err)[0], AgentEvent::Done{ok:false, error:Some(e), ..} if e=="unknown session"));
+    }
+
+    /// Live run against the installed `dsh` (needs DEEPSEEK_API_KEY), through
+    /// the same workspace/patch/command/parse path as `send_message`:
+    /// `LR_CHAR=claire LR_PROMPT='…' [LR_RESUME=session-…] [LR_MODEL=…] [LR_WS=dir]
+    ///  cargo test dsh_live -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn dsh_live() {
+        use std::io::{BufRead, Write};
+        let id = std::env::var("LR_CHAR").unwrap_or_else(|_| "iris".into());
+        let prompt = std::env::var("LR_PROMPT").unwrap_or_else(|_| "用一句话介绍你自己。".into());
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../characters");
+        let c = super::characters::load_all(&root).into_iter().find(|c| c.id == id).expect("character");
+        let ws = std::env::var("LR_WS").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir().join("lr-dsh-live").join(&id));
+        super::characters::prepare_workspace(&c, &ws).unwrap();
+        let model = std::env::var("LR_MODEL").ok().filter(|s| !s.is_empty());
+        let patch = super::characters::write_dsh_patch(&c, &ws, model.as_deref()).unwrap();
+        let resume = std::env::var("LR_RESUME").ok().filter(|s| !s.is_empty());
+        let cmd = build_command(&RunSpec {
+            provider: Provider::Deepseek,
+            binary: resolve_binary(Provider::Deepseek, None).expect("dsh on PATH"),
+            workspace: &ws,
+            persona_file: &super::characters::persona_file(&ws),
+            dsh_patch: &patch,
+            model: model.as_deref(),
+            permission_mode: &c.agent.permission_mode,
+            resume: resume.as_deref(),
+            allowed_tools: vec![],
+            env: vec![("COMFYUI_URL".into(), std::env::var("COMFYUI_URL").unwrap_or_else(|_| "http://127.0.0.1:8188".into()))],
+        });
+        let mut std_cmd = cmd.into_std();
+        let mut child = std_cmd
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn dsh");
+        child.stdin.take().unwrap().write_all(prompt.as_bytes()).unwrap();
+        let mut done = None;
+        for line in std::io::BufReader::new(child.stdout.take().unwrap()).lines() {
+            for ev in parse_line(Provider::Deepseek, &line.unwrap()) {
+                println!("EVENT {}", serde_json::to_string(&ev).unwrap());
+                if let AgentEvent::Done { ok, .. } = ev {
+                    done = Some(ok);
+                }
+            }
+        }
+        let status = child.wait().unwrap();
+        println!("WORKSPACE {}", ws.display());
+        assert_eq!(done, Some(true), "run should finish ok");
+        assert!(status.success());
+    }
 }
+

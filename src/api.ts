@@ -90,10 +90,19 @@ async function mockApi(): Promise<Api> {
   };
   return {
     bootstrap: async () => ({ characters, settings: { characters: {} }, dataDir: "(browser mock)", activeRuns: [] }),
-    checkAgents: async () => [
-      { provider: "claude", path: "/mock/claude", version: "mock" },
-      { provider: "codex", path: null, version: null },
-    ],
+    // `?missing=claude,dsh` previews the "agent not installed" warning.
+    checkAgents: async () => {
+      const missing = new URLSearchParams(location.search).get("missing")?.split(",") ?? ["codex"];
+      return ([
+        { provider: "claude", bin: "claude", version: "mock" },
+        { provider: "codex", bin: "codex", version: "mock" },
+        { provider: "deepseek", bin: "dsh", version: "0.2.2-rc.1" },
+      ] as const).map(({ provider, bin, version }): AgentAvailability =>
+        missing.includes(bin) || missing.includes(provider)
+          ? { provider, path: null, version: null }
+          : { provider, path: `/mock/${bin}`, version },
+      );
+    },
     saveSettings: async () => {},
     listConversations: async (cid) => convs.filter((c) => c.characterId === cid),
     getMessages: async (id) => msgs[id] || [],
