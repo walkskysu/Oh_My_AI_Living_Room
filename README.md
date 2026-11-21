@@ -95,3 +95,5 @@ Windows 下数据（对话库、设置、角色工作目录）在 `%APPDATA%\ohm
 5. **导出**：`export_sprite_sheet`（12fps，scale 0.6）→ `art/tools/pack_sheets.py` 按骨架原点对齐到统一画框、缩放 0.75、打包成方形 WebP 图集 + JSON，并生成首帧静态图。
 
 Poppy 的素材在 `art/poppy/`：先用 `birefnet_remove_background` 去掉原图的暗色光晕背景并铺白底，其余步骤相同（`make_edit.py`、`run_edits.sh`、`run_st.sh`，工程在 `/mnt/e/rig_projects/poppy/`）。她坐在自己的高脚凳上：See-through 会把凳子和调色盘一起归进 objects 层，所以 `build_psd.py` 时加上 `SPLIT=prop:stool:570`，把画布 y≥570 的部分拆成单独的 `stool` 层（放在最底），autorig 时给它 `"stool": "none"`，让它挂在 root 上不跟着身体动；动画里也不移动 hip。
+
+Poppy 的待机 / 工作 / 完成三个姿势带手部动作（调色盘上调颜料、转头对着画架挥笔、举手说话）：用 `make_edit.py` 生成新姿势（源图 `src/omalr_poppy_{mix,turn,wave}.png`，转头那张又对齐回原图的凳子位置）→ See-through → `build_psd.py` 后，用 `art/tools/split_layer.py` 把会动的小臂切成 `forearm_r` 层（放在袖子层下面，让袖口盖住关节）、把画笔切成 `brush` 层；autorig 时给 `forearm_r` 角色 `forearm`、`brush` 角色 `hand`（侧 `r`），得到肘部 `forearm_r` 和手腕 `hand_r` 骨骼；动画脚本是 `art/poppy/anims2.py`（`POSE = 'mix' | 'turn' | 'wave'`，分别导出为 reading / working / done）。这几张图 See-through 没拆出 face 层时，autorig 给 `hair_back` 角色 `head`。
