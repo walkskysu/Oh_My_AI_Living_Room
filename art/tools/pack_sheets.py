@@ -12,7 +12,7 @@ SRC = f'/mnt/e/rig_projects/{CHAR}/sheets'
 DST = f'/home/walksky/workspace/Oh_My_AI_Living_Room/public/characters/{CHAR}/anim'
 S = 0.6                      # export scale (pixels per canvas px)
 # canonical frame in seethrough canvas px (per character: covers every pose)
-CROP = {'iris': (96, 8, 904, 1016), 'poppy': (150, 4, 874, 1020)}[CHAR]
+CROP = {'iris': (96, 8, 904, 1016), 'poppy': (150, 4, 874, 1020), 'claire': (170, 0, 854, 1024)}[CHAR]
 ORIGIN = (512, 1024)         # skeleton origin in canvas px (autorig: bottom centre)
 CW, CH = round((CROP[2] - CROP[0]) * S), round((CROP[3] - CROP[1]) * S)
 R = 0.75                     # final downscale of every cell (keeps decoded sheets small)

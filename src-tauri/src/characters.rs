@@ -213,3 +213,20 @@ pub fn allowed_tools(c: &Character, ws: &Path) -> Vec<String> {
 pub fn persona_file(ws: &Path) -> PathBuf {
     ws.join(".living-room").join("persona.md")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_characters_parse_with_skills() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../characters");
+        let entries = std::fs::read_dir(&root).unwrap().flatten().filter(|e| e.path().join("character.json").is_file()).count();
+        let all = load_all(&root);
+        assert_eq!(all.len(), entries, "every characters/<id>/character.json must parse");
+        let claire = all.iter().find(|c| c.id == "claire").expect("claire");
+        let names: Vec<_> = claire.skills.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["financial-analysis", "stock-analysis"]);
+        assert!(claire.allowed_tools.iter().any(|t| t.contains("stock-analysis/stock.py")));
+    }
+}

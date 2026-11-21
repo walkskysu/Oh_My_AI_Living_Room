@@ -2,7 +2,7 @@
 
 一个温馨的「AI 客厅」桌面程序：客厅里住着几位角色，每位角色背后都是一个 CLI coding agent（Claude Code / Codex），有自己的人设、专长和 skills。点角色就能聊天或交代任务；她们在无聊、工作中、完成时会有不同的动画。
 
-第一版（v0.1）：Tauri 2 + React，已实现角色 **Iris（艾莉丝）**（阅读与写作）和 **Poppy（波比）**（画图、改图、反推提示词、拆图层），支持 Claude Code 与 Codex 两种 harness，所有对话存进 SQLite。
+第一版（v0.1）：Tauri 2 + React，已实现角色 **Iris（艾莉丝）**（阅读与写作）、**Poppy（波比）**（画图、改图、反推提示词、拆图层）和 **Claire（克莱尔）**（财经与股票技术分析），支持 Claude Code 与 Codex 两种 harness，所有对话存进 SQLite。
 
 ## 运行
 
@@ -48,7 +48,7 @@ Windows 下数据（对话库、设置、角色工作目录）在 `%APPDATA%\ohm
 | 客厅场景 | `public/background.jpg` 铺满窗口（cover），角色按 1672×941 舞台坐标摆放 |
 | 角色状态 | 看书（默认）→ 闲置 `boredAfterSec` 秒后**发呆**（打哈欠）→ 她开始动手（调用工具读写文件、执行命令等，或一轮回复超过 10 秒）时自动切到**工作中**（戴眼镜写笔记）→ 这一轮结束后**完成啦**（比 V），点她查看后回到看书。纯聊天回复中保持看书并显示「…」气泡 |
 | 动画 | Rigby2D 骨骼动画导出的序列帧（呼吸、眨眼、点头、头发摆动、挥手），四个姿势共用同一画框，切换时淡入淡出 |
-| 对话框 | 点角色（像素级命中）打开：单一输入框（不分聊天/任务，是否「工作」由后端按工具调用和耗时自动判断）、流式回复、工具调用折叠行、停止按钮、新对话、历史记录（重命名/删除）、「关于她」（人设、专长、skills、harness/模型/权限设置） |
+| 对话框 | 点角色（像素级命中）打开，聊天窗固定在右侧，场景会平移把这位角色移到剩余可见区域的中间（不会露出背景图边缘；本来就看得到的角色不动），关闭时滑回原位：单一输入框（不分聊天/任务，是否「工作」由后端按工具调用和耗时自动判断）、流式回复、工具调用折叠行、停止按钮、新对话、历史记录（重命名/删除）、「关于她」（人设、专长、skills、harness/模型/权限设置） |
 | Agent | 每个角色在自己的工作目录里运行 harness：`~/.local/share/com.ohmyai.livingroom/workspaces/<id>/`，产出放 `outputs/` |
 | 存储 | `~/.local/share/com.ohmyai.livingroom/living_room.db`：`conversations`（含 harness session id，用于续聊）+ `messages`（user / assistant / tool / error / system） |
 | 附件 | 把文件拖到窗口上或在输入框粘贴截图，会复制到该角色工作目录的 `inputs/`，消息里以 `` `inputs/xxx.png` `` 引用；对话中提到的 `inputs/`、`outputs/` 图片直接显示缩略图（双击用系统看图软件打开） |
@@ -66,6 +66,17 @@ Windows 下数据（对话库、设置、角色工作目录）在 `%APPDATA%\ohm
 - 工作流以 API 格式放在 `characters/poppy/skills/painting/workflows/`（由 ComfyUI 中保存的 `image_qwen_image_2_1_t2i` / `image_qwen_image_2_1_image_edit` / `QWenVL_desc_image_prompt` / `seethrough-basic` 转换而来），ComfyUI 端需装好对应模型和节点。
 - `character.json` 的 `allowedTools`（如 `Bash(python3 .claude/skills/painting/comfy.py:*)`）以 `--allowedTools` 传给 Claude Code：无头模式没法弹确认框，skill 要跑的脚本必须预先放行（工作目录未被信任时 `.claude/settings.json` 里的 allow 会被忽略，所以不用它）。Iris 的 `to_pdf.py` 也同样放行。
 - `character.json` 的 `harnessNotes.{claude,codex}` 会分别追加到 Claude Code 的系统提示（persona.md）和 Codex 的 `AGENTS.md`，用来告诉角色在当前 harness 下该用哪种画图工具。
+
+## Claire 的理财能力
+
+| 技能 | 内容 |
+|---|---|
+| `stock-analysis` | `stock.py`（纯标准库）：输入美股 / A 股 / 港股代码或公司名（`AAPL`、`600519`、`0700`、`腾讯`），拉取约一年日线（Yahoo Finance，A 股 / 港股优先腾讯前复权，互为备用；名称用东方财富搜索解析），以过去四周（20 个交易日，`--weeks` 可调）为窗口计算 MA5/10/20/60、MACD、RSI、KDJ、布林带、ATR、量比、OBV、趋势斜率与 R²、最大回撤、K 线形态，给出带权重的多空信号、-100～100 评分、支撑 / 压力 / 止损 / 目标位，并画 K 线 + 成交量 + MACD + RSI 图（`outputs/<代码>-<日期>.png`，纯 Python 写 PNG）。Claire 据此写出趋势研判、情景概率和「可以买 / 等回调 / 观望 / 不建议」的结论 |
+| `financial-analysis` | 财报解读（成长、盈利、偿债、现金流质量、估值、风险信号）、宏观经济与理财配置问答的方法和输出格式 |
+
+- `allowedTools` 放行 `stock.py` 以及 `WebSearch` / `WebFetch`（查财报、新闻），无头模式下不会卡在确认上。SKILL.md 要求每次只运行脚本本身（`a || b` 这类组合命令在无头模式下会被拒绝）。
+- 结论必须来自脚本或查到的真实数据，回复末尾固定附风险提示。
+- 已在 Linux（WSL2）用 Claude Code 以 App 相同的参数（`-p --output-format stream-json --permission-mode acceptEdits --append-system-prompt-file … --allowedTools …`）实测：`AAPL 最近四周走势怎么样？现在能买吗？`（约 1 分钟，回复带图表）和 `帮我分析一下贵州茅台和腾讯，写一份详细报告`（中文名解析、联网查财报、输出 md 报告，约 3 分钟），均无权限拒绝。
 
 ## Agent harness 适配（`src-tauri/src/agent.rs`）
 
@@ -103,3 +114,8 @@ Iris 的待机 / 工作 / 完成也带手部动作（看书时眼睛顺着行走
 - **写字**：`split_layer.py` 把握笔的手从 `arm_l` 切出来、把笔从 `prop`/`torso` 切出来，合成 `hand_r` 层（`KEEP=skin` 只取肤色和笔的像素，`REST=torso` 把手周围的上衣像素留给躯干，`FILL=torso` 补上手背后的上衣，`PAD=10` 让手腕在袖口下多延伸一点，移动时不露缝）。
 - **挥手**：`make_edit.py` 把完成姿势的 V 字手改成张开的手掌（`src/omalr_iris_wave.png`，种子 33；提示词里写明紫色眼睛，否则会变成棕色），See-through → `build_psd.py`，再把袖口以上的手切成 `hand_r`（放在袖子层下面），整只袖子挂躯干。
 - autorig 把手和纸页的骨骼放在它认为合适的地方，所以脚本里的 `pivot_rotate()` 会为每个旋转帧配一个平移帧，实现绕任意画布点（手腕、书脊）旋转。
+
+Claire 的素材在 `art/claire/`（工程在 `/mnt/e/rig_projects/claire/<pose>/`，副本在 `art/claire/rig/`）。原图 `images/Claire.png` 本来就朝右，正好对着场景里书桌上的笔记本，坐在桌前的椅子上（`scene` x 1125 / y 128 / width 256）；顶部加了 160px 留白，给伸懒腰举起的手。
+- **姿势**：`make_edit.py` 改出 bored（伸懒腰打哈欠）/ working（看平板上的 K 线，手指点划）/ done（竖大拇指）。生成的图身体位置和大小会漂，`align.py` 按腿部（坐姿里不动的部分）的轮廓 IoU 搜索缩放和平移，把它们对齐回原图画框。
+- **分层与骨骼**：`make_st.py` + `run_st.sh` 跑 See-through → `build_psd.py`（reading 用透明底 `alpha`，其余用 `white`）。reading 用 `split_layer.py` 把拿报告的手和报告合成 `hand_r`（`arms,prop`，`PAD=14` 让小臂伸进袖口），`art/tools/move_layer.py` 调整图层顺序；working 把点平板的手切成 `hand_r`；bored / done 的举起的手臂本来就是单独图层，autorig 给它 `hand` 角色、侧 `r`。
+- **动画**：`art/claire/anims.py`（`POSE = 'reading' | 'bored' | 'working' | 'done'`）：看报告时眼睛扫过报告、报告往自己这边倾、点头；发呆时举着的手臂摇晃、打个长哈欠；工作时手指在平板上点两下再划一下，眼睛跟着；完成时大拇指一上一下、点头微笑。`CHAR=claire pack_sheets.py` 打包（画框 `CROP (170, 0, 854, 1024)`），`preview.py` 出帧条检查。

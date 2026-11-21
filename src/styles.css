@@ -30,7 +30,11 @@ input, select, textarea { font: inherit; color: inherit; }
   position: absolute; inset: 0; overflow: hidden;
   background: radial-gradient(ellipse at center, #f8e9dc 0%, #e9d1c0 100%);
 }
-.stage { position: absolute; left: 50%; top: 50%; transform-origin: center center; }
+.stage {
+  position: absolute; left: 50%; top: 50%; transform-origin: center center;
+  /* camera pan when a chat opens / closes (see panFor in App.tsx) */
+  transition: transform .55s cubic-bezier(.25,.8,.3,1);
+}
 .stage-bg { position: absolute; inset: 0; width: 100%; height: 100%; user-select: none; }
 .app.panel-open .stage-bg { filter: saturate(0.92) brightness(0.97); transition: filter .4s; }
 

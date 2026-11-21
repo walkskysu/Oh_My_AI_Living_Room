@@ -71,9 +71,11 @@ async function tauriApi(): Promise<Api> {
 async function mockApi(): Promise<Api> {
   const iris = (await import("../characters/iris/character.json")).default as any;
   const poppy = (await import("../characters/poppy/character.json")).default as any;
+  const claire = (await import("../characters/claire/character.json")).default as any;
   const characters = [
     { ...iris, skills: [{ name: "reading-notes", description: "读书笔记" }, { name: "writing-polish", description: "润色" }] },
     { ...poppy, skills: [{ name: "painting", description: "画图、改图、拆图层" }, { name: "image-prompt-reverse", description: "反推提示词" }] },
+    { ...claire, skills: [{ name: "financial-analysis", description: "财务分析与经济学" }, { name: "stock-analysis", description: "个股技术分析" }] },
   ];
   const convs: Conversation[] = [];
   const msgs: Record<string, Message[]> = {};
