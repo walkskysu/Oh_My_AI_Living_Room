@@ -97,3 +97,9 @@ Windows 下数据（对话库、设置、角色工作目录）在 `%APPDATA%\ohm
 Poppy 的素材在 `art/poppy/`：先用 `birefnet_remove_background` 去掉原图的暗色光晕背景并铺白底，其余步骤相同（`make_edit.py`、`run_edits.sh`、`run_st.sh`，工程在 `/mnt/e/rig_projects/poppy/`）。她坐在自己的高脚凳上：See-through 会把凳子和调色盘一起归进 objects 层，所以 `build_psd.py` 时加上 `SPLIT=prop:stool:570`，把画布 y≥570 的部分拆成单独的 `stool` 层（放在最底），autorig 时给它 `"stool": "none"`，让它挂在 root 上不跟着身体动；动画里也不移动 hip。
 
 Poppy 的待机 / 工作 / 完成三个姿势带手部动作（调色盘上调颜料、转头对着画架挥笔、举手说话）：用 `make_edit.py` 生成新姿势（源图 `src/omalr_poppy_{mix,turn,wave}.png`，转头那张又对齐回原图的凳子位置）→ See-through → `build_psd.py` 后，用 `art/tools/split_layer.py` 把会动的小臂切成 `forearm_r` 层（放在袖子层下面，让袖口盖住关节）、把画笔切成 `brush` 层；autorig 时给 `forearm_r` 角色 `forearm`、`brush` 角色 `hand`（侧 `r`），得到肘部 `forearm_r` 和手腕 `hand_r` 骨骼；动画脚本是 `art/poppy/anims2.py`（`POSE = 'mix' | 'turn' | 'wave'`，分别导出为 reading / working / done）。这几张图 See-through 没拆出 face 层时，autorig 给 `hair_back` 角色 `head`。
+
+Iris 的待机 / 工作 / 完成也带手部动作（看书时眼睛顺着行走、翻页；工作时握笔的手一直在写；完成时张开手掌挥手说话），动画脚本是 `art/iris/anims2.py`（`POSE = 'read' | 'write' | 'wave'`，工程在 `/mnt/e/rig_projects/iris/{reading2,working2,done2}/`，导出成 reading / working / done）：
+- **翻页**：`art/iris/add_page.py` 往阅读 PSD 里画一张弯曲的纸页（`page` 层，放在书上面），autorig 给它 `hand` 角色得到一根骨骼；动画里绕书脊顶端从右翻到左，只在翻页那段显示（attachment key）。
+- **写字**：`split_layer.py` 把握笔的手从 `arm_l` 切出来、把笔从 `prop`/`torso` 切出来，合成 `hand_r` 层（`KEEP=skin` 只取肤色和笔的像素，`REST=torso` 把手周围的上衣像素留给躯干，`FILL=torso` 补上手背后的上衣，`PAD=10` 让手腕在袖口下多延伸一点，移动时不露缝）。
+- **挥手**：`make_edit.py` 把完成姿势的 V 字手改成张开的手掌（`src/omalr_iris_wave.png`，种子 33；提示词里写明紫色眼睛，否则会变成棕色），See-through → `build_psd.py`，再把袖口以上的手切成 `hand_r`（放在袖子层下面），整只袖子挂躯干。
+- autorig 把手和纸页的骨骼放在它认为合适的地方，所以脚本里的 `pivot_rotate()` 会为每个旋转帧配一个平移帧，实现绕任意画布点（手腕、书脊）旋转。
