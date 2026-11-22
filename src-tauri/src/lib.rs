@@ -326,6 +326,34 @@ fn read_image(state: State<'_, AppState>, character_id: String, path: String) ->
     Ok(format!("data:{mime};base64,{}", base64(&data)))
 }
 
+const AUDIO_EXTS: &[(&str, &str)] = &[
+    ("mp3", "audio/mpeg"),
+    ("wav", "audio/wav"),
+    ("flac", "audio/flac"),
+    ("ogg", "audio/ogg"),
+    ("opus", "audio/ogg"),
+    ("m4a", "audio/mp4"),
+    ("aac", "audio/aac"),
+];
+
+fn audio_mime(p: &std::path::Path) -> Option<&'static str> {
+    let ext = p.extension()?.to_str()?.to_ascii_lowercase();
+    AUDIO_EXTS.iter().find(|(e, _)| *e == ext).map(|(_, m)| *m)
+}
+
+/// An audio file from her workspace as a data: URL, for the in-chat player (e.g. Melody's songs).
+#[tauri::command]
+fn read_audio(state: State<'_, AppState>, character_id: String, path: String) -> Result<String, String> {
+    let p = workspace_file(&state, &character_id, &path)?;
+    let mime = audio_mime(&p).ok_or("不是音频文件")?;
+    let meta = std::fs::metadata(&p).map_err(err)?;
+    if meta.len() > 80 * 1024 * 1024 {
+        return Err("音频太大，请双击用系统播放器打开".into());
+    }
+    let data = std::fs::read(&p).map_err(err)?;
+    Ok(format!("data:{mime};base64,{}", base64(&data)))
+}
+
 /// A file name that is safe to create inside `inputs/`, made unique if it already exists.
 fn unique_input_path(ws: &std::path::Path, name: &str) -> PathBuf {
     let clean: String = name
@@ -894,6 +922,7 @@ pub fn run() {
             open_file,
             existing_files,
             read_image,
+            read_audio,
             import_file,
             save_upload,
             check_comfyui,
@@ -1025,26 +1054,39 @@ mod tests {
     #[test]
     #[ignore]
     fn dsh_live() {
+        live_run(Provider::Deepseek);
+    }
+
+    /// Same as `dsh_live`, through Claude Code (with the character's `--allowedTools`):
+    /// `LR_CHAR=melody LR_PROMPT='…' cargo test claude_live -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn claude_live() {
+        live_run(Provider::Claude);
+    }
+
+    fn live_run(provider: Provider) {
         use std::io::{BufRead, Write};
         let id = std::env::var("LR_CHAR").unwrap_or_else(|_| "iris".into());
         let prompt = std::env::var("LR_PROMPT").unwrap_or_else(|_| "用一句话介绍你自己。".into());
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../characters");
         let c = super::characters::load_all(&root).into_iter().find(|c| c.id == id).expect("character");
-        let ws = std::env::var("LR_WS").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir().join("lr-dsh-live").join(&id));
+        let ws = std::env::var("LR_WS").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir().join("lr-live").join(&id));
         super::characters::prepare_workspace(&c, &ws).unwrap();
         let model = std::env::var("LR_MODEL").ok().filter(|s| !s.is_empty());
         let patch = super::characters::write_dsh_patch(&c, &ws, model.as_deref()).unwrap();
         let resume = std::env::var("LR_RESUME").ok().filter(|s| !s.is_empty());
+        let allowed_tools = if provider == Provider::Claude { super::characters::allowed_tools(&c, &ws) } else { vec![] };
         let cmd = build_command(&RunSpec {
-            provider: Provider::Deepseek,
-            binary: resolve_binary(Provider::Deepseek, None).expect("dsh on PATH"),
+            provider,
+            binary: resolve_binary(provider, None).expect("agent CLI on PATH"),
             workspace: &ws,
             persona_file: &super::characters::persona_file(&ws),
             dsh_patch: &patch,
             model: model.as_deref(),
             permission_mode: &c.agent.permission_mode,
             resume: resume.as_deref(),
-            allowed_tools: vec![],
+            allowed_tools,
             env: vec![("COMFYUI_URL".into(), std::env::var("COMFYUI_URL").unwrap_or_else(|_| "http://127.0.0.1:8188".into()))],
         });
         let mut std_cmd = cmd.into_std();
@@ -1052,11 +1094,11 @@ mod tests {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()
-            .expect("spawn dsh");
+            .expect("spawn agent");
         child.stdin.take().unwrap().write_all(prompt.as_bytes()).unwrap();
         let mut done = None;
         for line in std::io::BufReader::new(child.stdout.take().unwrap()).lines() {
-            for ev in parse_line(Provider::Deepseek, &line.unwrap()) {
+            for ev in parse_line(provider, &line.unwrap()) {
                 println!("EVENT {}", serde_json::to_string(&ev).unwrap());
                 if let AgentEvent::Done { ok, .. } = ev {
                     done = Some(ok);

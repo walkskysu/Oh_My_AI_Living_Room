@@ -11,3 +11,6 @@ art/poppy/src/_*
 art/claire/gen
 art/claire/layers
 __pycache__/
+art/melody/gen
+art/melody/layers
+art/melody/src/_*

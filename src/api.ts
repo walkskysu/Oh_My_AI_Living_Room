@@ -27,6 +27,8 @@ export interface Api {
   cancelRun(characterId: string): Promise<void>;
   /** Image in her workspace as a data: URL (for previews). */
   readImage(characterId: string, path: string): Promise<string>;
+  /** Audio in her workspace as a data: URL (in-chat player). */
+  readAudio(characterId: string, path: string): Promise<string>;
   /** Copy a dropped file into her workspace; returns e.g. `inputs/foo.png`. */
   importFile(characterId: string, path: string): Promise<string>;
   /** Save pasted bytes into her workspace; returns e.g. `inputs/paste.png`. */
@@ -58,6 +60,7 @@ async function tauriApi(): Promise<Api> {
     existingFiles: (characterId, paths) => invoke("existing_files", { characterId, paths }),
     cancelRun: (characterId) => invoke("cancel_run", { characterId }),
     readImage: (characterId, path) => invoke("read_image", { characterId, path }),
+    readAudio: (characterId, path) => invoke("read_audio", { characterId, path }),
     importFile: (characterId, path) => invoke("import_file", { characterId, path }),
     saveUpload: (characterId, name, data) => invoke("save_upload", { characterId, name, data: Array.from(data) }),
     checkComfyui: (url) => invoke("check_comfyui", { url: url ?? null }),
@@ -72,10 +75,12 @@ async function mockApi(): Promise<Api> {
   const iris = (await import("../characters/iris/character.json")).default as any;
   const poppy = (await import("../characters/poppy/character.json")).default as any;
   const claire = (await import("../characters/claire/character.json")).default as any;
+  const melody = (await import("../characters/melody/character.json")).default as any;
   const characters = [
     { ...iris, skills: [{ name: "reading-notes", description: "读书笔记" }, { name: "writing-polish", description: "润色" }] },
     { ...poppy, skills: [{ name: "painting", description: "画图、改图、拆图层" }, { name: "image-prompt-reverse", description: "反推提示词" }] },
     { ...claire, skills: [{ name: "financial-analysis", description: "财务分析与经济学" }, { name: "stock-analysis", description: "个股技术分析" }] },
+    { ...melody, skills: [{ name: "music-composing", description: "作曲、谱曲、纯音乐" }] },
   ];
   const convs: Conversation[] = [];
   const msgs: Record<string, Message[]> = {};
@@ -119,6 +124,16 @@ async function mockApi(): Promise<Api> {
     existingFiles: async (_c, paths) => paths.map(() => true),
     cancelRun: async () => {},
     readImage: async () => "/characters/poppy/poses/reading.png",
+    // a short generated tone so the in-chat player can be previewed in the browser
+    readAudio: async () => {
+      const rate = 8000, n = rate * 2, buf = new DataView(new ArrayBuffer(44 + n * 2));
+      const str = (o: number, t: string) => [...t].forEach((ch, i) => buf.setUint8(o + i, ch.charCodeAt(0)));
+      str(0, "RIFF"); buf.setUint32(4, 36 + n * 2, true); str(8, "WAVEfmt "); buf.setUint32(16, 16, true);
+      buf.setUint16(20, 1, true); buf.setUint16(22, 1, true); buf.setUint32(24, rate, true); buf.setUint32(28, rate * 2, true);
+      buf.setUint16(32, 2, true); buf.setUint16(34, 16, true); str(36, "data"); buf.setUint32(40, n * 2, true);
+      for (let i = 0; i < n; i++) buf.setInt16(44 + i * 2, Math.sin((i / rate) * 2 * Math.PI * [523, 659, 784][Math.floor((i / n) * 3)]) * 6000 * (1 - (i % (n / 3)) / (n / 3)), true);
+      return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+    },
     importFile: async (_c, path) => `inputs/${path.split(/[\\/]/).pop()}`,
     saveUpload: async (_c, name) => `inputs/${name}`,
     checkComfyui: async (url) => ({ url: url || "http://127.0.0.1:8188", ok: false, detail: "浏览器预览模式无法检测" }),
@@ -133,10 +148,11 @@ async function mockApi(): Promise<Api> {
       const c = conv;
       const base = { runId, characterId, conversationId: c.id };
       // mock: messages that sound like work use a tool, which flips her into the working pose
-      const work = /整理|笔记|写|保存|文件|save|write/i.test(text);
+      const work = /整理|笔记|写|保存|文件|歌|曲|save|write/i.test(text);
       setTimeout(() => statusCbs.forEach((f) => f({ ...base, status: "running", worked: false, ok: true })), 10);
       if (work) setTimeout(() => statusCbs.forEach((f) => f({ ...base, status: "working", worked: true, ok: true })), 400);
-      const reply = work ? "好的，这个任务交给我吧！我已经整理好了笔记，保存在 `outputs/读书笔记.pdf`。" : "嗯嗯，我在听哦～这是浏览器预览模式，真正的回复需要在桌面程序里运行。";
+      const song = characterId === "melody";
+      const reply = work && song ? "写好啦！戴上耳机听听～ `outputs/雨天的猫.mp3`" : work ? "好的，这个任务交给我吧！我已经整理好了笔记，保存在 `outputs/读书笔记.pdf`。" : "嗯嗯，我在听哦～这是浏览器预览模式，真正的回复需要在桌面程序里运行。";
       let i = 0;
       const tick = setInterval(() => {
         if (i < reply.length) {
