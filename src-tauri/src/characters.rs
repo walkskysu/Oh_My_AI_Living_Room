@@ -261,6 +261,10 @@ mod tests {
         let names: Vec<_> = claire.skills.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["financial-analysis", "stock-analysis"]);
         assert!(claire.allowed_tools.iter().any(|t| t.contains("stock-analysis/stock.py")));
+        let melody = all.iter().find(|c| c.id == "melody").expect("melody");
+        let names: Vec<_> = melody.skills.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["music-composing"]);
+        assert!(melody.allowed_tools.iter().any(|t| t.contains("music-composing/music.py")));
     }
 
     #[test]

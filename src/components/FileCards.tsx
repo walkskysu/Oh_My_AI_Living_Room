@@ -53,6 +53,7 @@ function fileIcon(name: string) {
 }
 
 const PREVIEWABLE = /\.(png|jpe?g|webp|gif|bmp)$/i;
+const PLAYABLE = /\.(mp3|wav|flac|ogg|opus|m4a|aac)$/i;
 
 /** Small square preview of a workspace image (empty box if not an image). */
 export function ImageThumb({ characterId, path }: { characterId: string; path: string }) {
@@ -90,6 +91,51 @@ function ImageCard({ file, characterId, onOpen }: { file: FileRef; characterId: 
   );
 }
 
+/** A song she made: loads on the first click (songs are several MB), then plays inline. */
+function AudioCard({ file, characterId, onOpen }: { file: FileRef; characterId: string; onOpen: () => void }) {
+  const { api } = useStore();
+  const [src, setSrc] = useState<string | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "error">("idle");
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => () => {
+    if (src?.startsWith("blob:")) URL.revokeObjectURL(src);
+  }, [src]);
+  const load = async () => {
+    if (!api || state === "loading") return;
+    setState("loading");
+    try {
+      const url = await api.readAudio(characterId, file.path);
+      // a blob: URL seeks reliably and keeps the base64 string out of the DOM
+      const blobUrl = url.startsWith("data:") ? URL.createObjectURL(await (await fetch(url)).blob()) : url;
+      setSrc(blobUrl);
+      setState("idle");
+    } catch (e) {
+      setError(String(e));
+      setState("error");
+    }
+  };
+  const dot = file.name.lastIndexOf(".");
+  return (
+    <div className="audio-card" title={`${file.name} · 双击用系统播放器打开`} onDoubleClick={onOpen}>
+      <div className="audio-head">
+        {src ? (
+          <span className="audio-icon">🎵</span>
+        ) : (
+          <button className="audio-play" onClick={load} disabled={state === "loading"} aria-label="播放">
+            {state === "loading" ? "…" : "▶"}
+          </button>
+        )}
+        <span className="file-meta">
+          <span className="file-title">{file.name.slice(0, dot)}</span>
+          <span className="file-ext">{file.name.slice(dot + 1).toUpperCase()} · {src ? "双击用系统播放器打开" : "点 ▶ 试听"}</span>
+        </span>
+      </div>
+      {src && <audio className="audio-player" src={src} controls autoPlay preload="auto" />}
+      {error && <div className="file-error">{error}</div>}
+    </div>
+  );
+}
+
 export function FileCards({ files, characterId }: { files: FileRef[]; characterId: string }) {
   const { api } = useStore();
   const [error, setError] = useState<string | null>(null);
@@ -122,6 +168,7 @@ export function FileCards({ files, characterId }: { files: FileRef[]; characterI
     <div className="file-cards">
       {shown.map((f) => {
         if (PREVIEWABLE.test(f.name)) return <ImageCard key={f.path} file={f} characterId={characterId} onOpen={() => open(f)} />;
+        if (PLAYABLE.test(f.name)) return <AudioCard key={f.path} file={f} characterId={characterId} onOpen={() => open(f)} />;
         const dot = f.name.lastIndexOf(".");
         return (
           <button

@@ -68,6 +68,11 @@ else:
     nonwhite = (765 - O_rgba[..., :3].sum(-1)) > 36
     near = np.array(Image.fromarray((comp_a > 0.25).astype(np.uint8) * 255).filter(ImageFilter.MaxFilter(13))) > 0
     orig_mask = nonwhite & near
+    if os.environ.get('WHITE_INSIDE'):
+        # white parts *inside* the figure (paper, socks) are painting too, not background:
+        # recolour them as well, or layers keep See-through's guessed colours there
+        inside = np.array(Image.fromarray((comp_a > 0.5).astype(np.uint8) * 255).filter(ImageFilter.MinFilter(9))) > 0
+        orig_mask |= inside
     O_rgba[..., 3] = 255
 
 # 1) recolour visible pixels of each layer from the original painting

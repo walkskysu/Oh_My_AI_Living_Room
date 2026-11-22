@@ -2,7 +2,7 @@
 
 一个温馨的「AI 客厅」桌面程序：客厅里住着几位角色，每位角色背后都是一个 CLI coding agent（Claude Code / Codex / DeepSeek Harness），有自己的人设、专长和 skills。点角色就能聊天或交代任务；她们在无聊、工作中、完成时会有不同的动画。
 
-第一版（v0.1）：Tauri 2 + React，已实现角色 **Iris（艾莉丝）**（阅读与写作）、**Poppy（波比）**（画图、改图、反推提示词、拆图层）和 **Claire（克莱尔）**（财经与股票技术分析），支持 Claude Code、Codex 与 DeepSeek Harness 三种 harness，所有对话存进 SQLite。
+第一版（v0.1）：Tauri 2 + React，已实现角色 **Iris（艾莉丝）**（阅读与写作）、**Poppy（波比）**（画图、改图、反推提示词、拆图层）、**Claire（克莱尔）**（财经与股票技术分析）和 **Melody（美乐蒂）**（作曲、给歌词谱曲、纯音乐），支持 Claude Code、Codex 与 DeepSeek Harness 三种 harness，所有对话存进 SQLite。
 
 ## 运行
 
@@ -51,6 +51,7 @@ Windows 下数据（对话库、设置、角色工作目录）在 `%APPDATA%\ohm
 | 对话框 | 点角色（像素级命中）打开，聊天窗固定在右侧，场景会平移把这位角色移到剩余可见区域的中间（不会露出背景图边缘；本来就看得到的角色不动），关闭时滑回原位：单一输入框（不分聊天/任务，是否「工作」由后端按工具调用和耗时自动判断）、流式回复、工具调用折叠行、停止按钮、新对话、历史记录（重命名/删除）、「关于她」（人设、专长、skills、harness/模型/权限设置） |
 | Agent | 每个角色在自己的工作目录里运行 harness：`~/.local/share/com.ohmyai.livingroom/workspaces/<id>/`，产出放 `outputs/` |
 | 存储 | `~/.local/share/com.ohmyai.livingroom/living_room.db`：`conversations`（含 harness session id，用于续聊）+ `messages`（user / assistant / tool / error / system） |
+| 音频 | 对话中提到的 `outputs/`、`inputs/` 里的 mp3 / wav / flac / ogg / m4a 显示为播放卡片：点 ▶ 才加载（歌一般几 MB），之后直接在聊天里播放、拖动进度；双击用系统播放器打开 |
 | 附件 | 把文件拖到窗口上或在输入框粘贴截图，会复制到该角色工作目录的 `inputs/`，消息里以 `` `inputs/xxx.png` `` 引用；对话中提到的 `inputs/`、`outputs/` 图片直接显示缩略图（双击用系统看图软件打开） |
 | Agent 检测 | 启动时（以及在设置里改了 CLI 路径后）检测本机有没有 `claude` / `codex` / `dsh`；有角色配置的 harness 本机找不到时，顶部弹出提示，列出是哪位角色、缺哪个命令，可以直接打开设置。该角色聊天窗的 harness 标签显示「未安装」，「关于她」的下拉框里也会标出未安装的 harness。浏览器预览可以用 `?missing=claude,dsh` 模拟 |
 | 通知 | 对话框关闭时任务完成/出错会弹出 toast，点 toast 直接打开那段对话 |
@@ -79,6 +80,18 @@ Windows 下数据（对话库、设置、角色工作目录）在 `%APPDATA%\ohm
 - 结论必须来自脚本或查到的真实数据，回复末尾固定附风险提示。
 - 已在 Linux（WSL2）用 Claude Code 以 App 相同的参数（`-p --output-format stream-json --permission-mode acceptEdits --append-system-prompt-file … --allowedTools …`）实测：`AAPL 最近四周走势怎么样？现在能买吗？`（约 1 分钟，回复带图表）和 `帮我分析一下贵州茅台和腾讯，写一份详细报告`（中文名解析、联网查财报、输出 md 报告，约 3 分钟），均无权限拒绝。
 
+## Melody 的作曲能力
+
+| 技能 | 内容 |
+|---|---|
+| `music-composing` | `music.py`（纯标准库）调用 ComfyUI 的 MiniMax Music 3（`audio_minimax_music_3` 工作流，API 格式放在 `characters/melody/skills/music-composing/workflows/song.json`，平铺了原工作流的子图，固定用分块 VAE 解码）。Melody 先把英文编曲描述（Global Metadata / Vocal Details / Arrangement 三段）和带 `[Verse]` `[Chorus]` 等段落标签的歌词写进 `outputs/<歌名>.caption.txt` / `.lyrics.txt`，再 `music.py compose --caption-file … --lyrics-file … --duration 150 --out outputs/<歌名>.mp3`；纯音乐用 `--instrumental`（歌词只有段落标签，Vocal Details 写明 instrumental）。输出 mp3 320k（`--format flac` 无损），旁边写一个 `<歌名>.json` 记下 caption、歌词和 seed，方便复现或换 seed 重做 |
+
+- 主人只给要求时她自己写词；给了歌词就原样使用，只加段落标签。她听不到生成的音频，所以人设和技能都要求她只说明设计（风格、结构、配器），不描述「听起来」如何。
+- RTX 3090 上实测：30 秒的曲子约 75 秒（含加载模型），90 秒的纯音乐约 2 分 15 秒，130 秒的歌约 3 分 40 秒（生成时间约为曲长的 1.5–2.5 倍）。纯音乐没给歌词时脚本按时长排段落标签（约每 15 秒一段），段落太少模型容易提前收尾。脚本最多等 560 秒，超时会给出 `music.py wait <prompt_id> --out …` 继续取结果；技能里要求 Bash 超时设成 10 分钟。
+- `allowedTools` 放行 `music.py`（`python` / `python3` / `py`），无头模式下不会卡在确认上。
+- 已在 Linux（WSL2）用 Claude Code 以 App 相同的参数实测三种请求，均无权限拒绝：「写一首关于雨天和猫的温柔中文歌」（自己写词，130 秒，约 4 分钟）、「一分钟 lo-fi 纯音乐，不要人声」（第一版只出了 30 秒，她按技能换 seed 重做成 70 秒；之后加了按时长排段落标签）、给一段歌词谱成男声流行摇滚（歌词一字未改，自己加段落标签和 oh-oh 和声，107 秒）。
+- 测试：`LR_CHAR=melody LR_PROMPT='…' cargo test --lib claude_live -- --ignored --nocapture`（在 `src-tauri/`）用和 App 完全相同的代码路径（工作目录准备、persona、`--allowedTools`、`COMFYUI_URL`）跑一次 Claude Code；`dsh_live` 同理跑 DeepSeek Harness。
+
 ## Agent harness 适配（`src-tauri/src/agent.rs`）
 
 | | Claude Code | Codex | DeepSeek Harness |
@@ -95,7 +108,7 @@ DeepSeek Harness 的说明：
 - `bypassPermissions` 映射为 `danger-full-access`，其余为 `workspace-write`（沙箱内可写工作目录、可联网）；无头模式没法确认，所以固定 `--approval-policy never`，需要审批的调用直接被拒绝而不是卡住。`allowedTools` 只对 Claude Code 生效。
 - `--json` 的 `text` 是整条提交的消息，不是逐 token 流，所以 DeepSeek 下回复是一段一段出现的。
 - persona 里会附一段工具名对照（Read → read、WebSearch → web_search…），技能文档里的 Claude Code 工具名不用改。切换 harness 时会清空模型设置（模型名不通用）。
-- 可以用 `LR_CHAR=claire LR_PROMPT='…' cargo test --lib dsh_live -- --ignored --nocapture`（在 `src-tauri/`）走和 App 相同的代码路径实测一次。
+- 可以用 `LR_CHAR=claire LR_PROMPT='…' cargo test --lib dsh_live -- --ignored --nocapture`（在 `src-tauri/`）走和 App 相同的代码路径实测一次；`claude_live` 是 Claude Code 版。
 
 > 已在 Linux（WSL2/WSLg）用 Claude Code 2.1.327 实测聊天、续聊、派任务写文件、使用 skill。Codex 适配按 `codex exec --json` 的事件格式实现并有单元测试，但本机未安装 codex，尚未实机验证。
 
@@ -127,3 +140,9 @@ Claire 的素材在 `art/claire/`（工程在 `/mnt/e/rig_projects/claire/<pose>
 - **姿势**：`make_edit.py` 改出 bored（伸懒腰打哈欠）/ working（看平板上的 K 线，手指点划）/ done（竖大拇指）。生成的图身体位置和大小会漂，`align.py` 按腿部（坐姿里不动的部分）的轮廓 IoU 搜索缩放和平移，把它们对齐回原图画框。
 - **分层与骨骼**：`make_st.py` + `run_st.sh` 跑 See-through → `build_psd.py`（reading 用透明底 `alpha`，其余用 `white`）。reading 用 `split_layer.py` 把拿报告的手和报告合成 `hand_r`（`arms,prop`，`PAD=14` 让小臂伸进袖口），`art/tools/move_layer.py` 调整图层顺序；working 把点平板的手切成 `hand_r`；bored / done 的举起的手臂本来就是单独图层，autorig 给它 `hand` 角色、侧 `r`。
 - **动画**：`art/claire/anims.py`（`POSE = 'reading' | 'bored' | 'working' | 'done'`）：看报告时眼睛扫过报告、报告往自己这边倾、点头；发呆时举着的手臂摇晃、打个长哈欠；工作时手指在平板上点两下再划一下，眼睛跟着；完成时大拇指一上一下、点头微笑。`CHAR=claire pack_sheets.py` 打包（画框 `CROP (170, 0, 854, 1024)`），`preview.py` 出帧条检查。
+
+Melody 的素材在 `art/melody/`（工程在 `/mnt/e/rig_projects/melody/<pose>/`，副本在 `art/melody/rig/`）。原图 `images/Melody.png` 是靠在什么东西上、跷着腿听耳机的姿势，正好放在客厅中间那张空着的粉色单人沙发里（`scene` x 763 / y 213 / width 289）。
+- **去背景**：`workflows/rmbg.json`（BiRefNet）出遮罩 → `make_alpha.py` 收紧遮罩去掉暗色光晕，生成透明底 / 白底两版，并在顶部加 96px 留白（伸懒腰的手会举出原图画框）。
+- **姿势**：`make_edit.py` 改出 bored（伸懒腰打哈欠，种子 11）/ working（睁眼低头，在五线谱本上用铅笔写，种子 33）/ done（睁开淡紫色眼睛挥手，种子 11）；原图闭着眼，提示词里要写明眼睛颜色。`align.py` 按腿部轮廓对齐回原图画框。
+- **分层**：`run_st.sh` 跑 See-through → `build_layers.sh` 一步完成：`build_psd.py`（白底姿势加 `WHITE_INSIDE=1`：画面内部的白色——五线谱本、袜子——也按原画重新上色，否则会留着 See-through 猜的紫色，变成本子上的斑点），再用 `split_layer.py` 切出会动的部分：四个姿势都把跷着的那条腿的小腿 + 袜子切成 `shin_l`（放在腿层下面、`PAD=6` 伸进大腿下，绕膝盖转时不露缝），bored 切出举起的手臂、working 切出握铅笔的手（`KEEP=skin`，铅笔尾端在卫衣层里，单独补进去）、done 切出袖口以上挥动的手（`PAD=10` 伸进袖口）。
+- **骨骼与动画**：autorig（关 IK；耳机 `ribbon` 给 `ear` 角色，跟着头走；手臂、本子挂躯干；腿和袜子挂 hip；`shin_l` 给 `shin`，切出来的手给 `hand` 侧 `r`）→ `art/melody/anims.py`（`POSE = 'reading' | 'bored' | 'working' | 'done'`）：听歌时闭着眼随 90 BPM 的节拍左右晃头、跷着的脚每拍点一下；发呆时举着的手臂摇晃、长长打个哈欠；工作时铅笔沿着五线谱一小段一小段地写、眼睛跟着；完成时张开手掌挥手、歪头笑。`CHAR=melody pack_sheets.py` 打包（画框 `CROP (186, 0, 838, 1024)`），`preview.py` 出帧条检查。
