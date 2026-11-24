@@ -10,6 +10,8 @@ http://127.0.0.1:8188.
                           --duration 150 --out outputs/x.mp3 [--seed N] [--format mp3|flac]
   python music.py compose --caption-file outputs/x.caption.txt --instrumental --duration 120 --out outputs/x.mp3
   python music.py wait <prompt_id> --out outputs/x.mp3   (resume a job that outlived the shell timeout)
+  python music.py fetch <https-url> --out outputs/x.mp3 [--clip-id ID] [--title T] [--style-file f] [--lyrics-file f]
+                          (save a Suno download URL from the audio-download tool into outputs/, plus a sidecar)
 
 Every command prints one JSON object on its last line ({"ok": true, ...} or {"ok": false, "error": ...}).
 """
@@ -297,6 +299,39 @@ def cmd_wait(comfy, args):
     finish(comfy, entry, args.out, meta, pending)
 
 
+def cmd_fetch(comfy, args):
+    """Save a Suno song (URL from the audio-download MCP tool) under outputs/ with a sidecar."""
+    if urllib.parse.urlsplit(args.src).scheme != "https":
+        raise ComfyError("fetch 只接受 https 链接（audio-download 返回的 url）")
+    out_dir = os.path.realpath("outputs")
+    out = os.path.realpath(args.out)
+    if os.path.dirname(out) != out_dir or os.path.splitext(out)[1].lower() not in (".mp3", ".wav"):
+        raise ComfyError("--out 必须是 outputs/ 下的 .mp3 或 .wav 文件，例如 outputs/晴天的猫.mp3")
+    os.makedirs(out_dir, exist_ok=True)
+    req = urllib.request.Request(args.src, headers={"User-Agent": "living-room-melody/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=args.timeout) as r:
+            ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if not (ctype.startswith("audio/") or ctype in ("application/octet-stream", "binary/octet-stream")):
+                raise ComfyError(f"链接返回的不是音频（Content-Type: {ctype or '未知'}）")
+            data = r.read()
+    except urllib.error.HTTPError as e:
+        raise ComfyError(f"下载失败：HTTP {e.code}（链接可能已过期，重新调用 audio-download 拿新链接）")
+    except (urllib.error.URLError, OSError) as e:
+        raise ComfyError(f"下载失败：{e}")
+    if len(data) < 1024:
+        raise ComfyError("下载到的文件太小，不像音频")
+    path = unique_path(out)
+    with open(path, "wb") as f:
+        f.write(data)
+    path = os.path.relpath(path).replace("\\", "/")
+    meta = {"source": "suno", "clip_id": args.clip_id, "song_url": f"https://suno.com/song/{args.clip_id}" if args.clip_id else None,
+            "title": args.title, "style": read_text(None, args.style_file, "风格") or None,
+            "lyrics": read_text(None, args.lyrics_file, "歌词") or None, "file": path, "seconds": audio_seconds(path)}
+    side = write_sidecar(path, meta)
+    emit({"ok": True, "file": path, "seconds": meta["seconds"], "clip_id": args.clip_id, "info": side})
+
+
 def main():
     if hasattr(sys.stdout, "reconfigure"):
         # Windows consoles default to a legacy code page; we print Chinese.
@@ -326,10 +361,19 @@ def main():
     p.add_argument("--out", required=True)
     p.add_argument("--timeout", type=int, default=560)
 
+    p = sub.add_parser("fetch", help="把 Suno 的下载链接（audio-download 返回的 url）存到 outputs/")
+    p.add_argument("src", help="audio-download 返回的 https 链接")
+    p.add_argument("--out", required=True, help="outputs/ 下的保存路径，如 outputs/晴天的猫.mp3")
+    p.add_argument("--clip-id", help="Suno 的 clip id（写进 sidecar）")
+    p.add_argument("--title")
+    p.add_argument("--style-file", help="风格标签文件（写进 sidecar）")
+    p.add_argument("--lyrics-file", help="歌词文件（写进 sidecar）")
+    p.add_argument("--timeout", type=int, default=120)
+
     args = ap.parse_args()
     comfy = Comfy(args.url)
     try:
-        {"check": cmd_check, "compose": cmd_compose, "wait": cmd_wait}[args.cmd](comfy, args)
+        {"check": cmd_check, "compose": cmd_compose, "wait": cmd_wait, "fetch": cmd_fetch}[args.cmd](comfy, args)
     except ComfyError as e:
         emit({"ok": False, "error": str(e)})
         sys.exit(1)
