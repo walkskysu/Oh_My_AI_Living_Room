@@ -84,12 +84,14 @@ Windows 下数据（对话库、设置、角色工作目录）在 `%APPDATA%\ohm
 
 | 技能 | 内容 |
 |---|---|
-| `music-composing` | `music.py`（纯标准库）调用 ComfyUI 的 MiniMax Music 3（`audio_minimax_music_3` 工作流，API 格式放在 `characters/melody/skills/music-composing/workflows/song.json`，平铺了原工作流的子图，固定用分块 VAE 解码）。Melody 先把英文编曲描述（Global Metadata / Vocal Details / Arrangement 三段）和带 `[Verse]` `[Chorus]` 等段落标签的歌词写进 `outputs/<歌名>.caption.txt` / `.lyrics.txt`，再 `music.py compose --caption-file … --lyrics-file … --duration 150 --out outputs/<歌名>.mp3`；纯音乐用 `--instrumental`（歌词只有段落标签，Vocal Details 写明 instrumental）。输出 mp3 320k（`--format flac` 无损），旁边写一个 `<歌名>.json` 记下 caption、歌词和 seed，方便复现或换 seed 重做 |
+| `music-composing`（Suno，Claude Code 默认） | 直接调用 Suno MCP（`mcp__suno__*`，用户级配置，在 Claude Code 里 `/mcp` 登录 suno.com）：先 `account-usage` 查积分，把英文风格标签和带段落标签的歌词写进 `outputs/<歌名>.style.txt` / `.lyrics.txt`，`audio-create` 自定义模式（title / style / lyrics，纯音乐 `instrumental: true`）一次出 2 首 → `audio-wait` 等到 complete → `audio-download`（`confirm: true`，每首扣 1 个下载额度）拿到链接 → `music.py fetch <url> --out outputs/<歌名>.mp3 --clip-id …` 存成本地文件并写 sidecar（`source: suno`、clip id、suno.com 链接、风格、歌词）。`fetch` 只接受 https 链接，只写 `outputs/` 下的 .mp3 / .wav。Suno 不可用（工具不存在、未登录、积分 < 10、报错）时回退到下面的 ComfyUI；下载额度用完时只给 suno.com 链接。Codex / DeepSeek Harness 没有 Suno，只走 ComfyUI |
+| `music-composing`（ComfyUI） | `music.py`（纯标准库）调用 ComfyUI 的 MiniMax Music 3（`audio_minimax_music_3` 工作流，API 格式放在 `characters/melody/skills/music-composing/workflows/song.json`，平铺了原工作流的子图，固定用分块 VAE 解码）。Melody 先把英文编曲描述（Global Metadata / Vocal Details / Arrangement 三段）和带 `[Verse]` `[Chorus]` 等段落标签的歌词写进 `outputs/<歌名>.caption.txt` / `.lyrics.txt`，再 `music.py compose --caption-file … --lyrics-file … --duration 150 --out outputs/<歌名>.mp3`；纯音乐用 `--instrumental`（歌词只有段落标签，Vocal Details 写明 instrumental）。输出 mp3 320k（`--format flac` 无损），旁边写一个 `<歌名>.json` 记下 caption、歌词和 seed，方便复现或换 seed 重做 |
 
 - 主人只给要求时她自己写词；给了歌词就原样使用，只加段落标签。她听不到生成的音频，所以人设和技能都要求她只说明设计（风格、结构、配器），不描述「听起来」如何。
 - RTX 3090 上实测：30 秒的曲子约 75 秒（含加载模型），90 秒的纯音乐约 2 分 15 秒，130 秒的歌约 3 分 40 秒（生成时间约为曲长的 1.5–2.5 倍）。纯音乐没给歌词时脚本按时长排段落标签（约每 15 秒一段），段落太少模型容易提前收尾。脚本最多等 560 秒，超时会给出 `music.py wait <prompt_id> --out …` 继续取结果；技能里要求 Bash 超时设成 10 分钟。
-- `allowedTools` 放行 `music.py`（`python` / `python3` / `py`），无头模式下不会卡在确认上。
+- `allowedTools` 放行 `music.py`（`python` / `python3` / `py`）和 Suno 的 `account-usage` / `audio-create` / `audio-wait` / `audio-retrieve` / `audio-download`，无头模式下不会卡在确认上。
 - 已在 Linux（WSL2）用 Claude Code 以 App 相同的参数实测三种请求，均无权限拒绝：「写一首关于雨天和猫的温柔中文歌」（自己写词，130 秒，约 4 分钟）、「一分钟 lo-fi 纯音乐，不要人声」（第一版只出了 30 秒，她按技能换 seed 重做成 70 秒；之后加了按时长排段落标签）、给一段歌词谱成男声流行摇滚（歌词一字未改，自己加段落标签和 oh-oh 和声，107 秒）。
+- 接入 Suno 后同样以 App 参数实测「写一首一分钟左右的温柔中文小歌，关于冬天早上的热可可」：account-usage → 写 style / lyrics → audio-create（2 首）→ audio-wait → 两次 audio-download（同时下载时撞到一次 `rate_limited`，技能里已改为逐首下载）→ `music.py fetch`，得到 59.6 秒和 59.9 秒两首 mp3，用时约 54 秒，花费 10 积分和 2 个下载额度，无权限拒绝。
 - 测试：`LR_CHAR=melody LR_PROMPT='…' cargo test --lib claude_live -- --ignored --nocapture`（在 `src-tauri/`）用和 App 完全相同的代码路径（工作目录准备、persona、`--allowedTools`、`COMFYUI_URL`）跑一次 Claude Code；`dsh_live` 同理跑 DeepSeek Harness。
 
 ## Agent harness 适配（`src-tauri/src/agent.rs`）
